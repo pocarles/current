@@ -1,0 +1,9 @@
+/.build/
+/dist/
+/.test-data/
+.DS_Store
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.p8
+*.p12
