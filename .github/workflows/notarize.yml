@@ -1,0 +1,102 @@
+name: Notarize reviewed Current installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the installer after Apple acceptance and Gatekeeper verification
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: current-first-installer
+  cancel-in-progress: false
+
+jobs:
+  notarize:
+    if: github.repository == 'pocarles/current' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 35
+    environment: release
+    permissions:
+      contents: write # Download and update this repository's private draft assets.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download the reviewed installer from its private draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v0.1.0" > "$RUNNER_TEMP/current-draft.json"
+          python3 - "$RUNNER_TEMP/current-draft.json" <<'PY'
+          import json, sys
+          with open(sys.argv[1]) as stream:
+              release = json.load(stream)
+          assert release['draft'] is True
+          assert release['target_commitish'] == '304fe8a4ff7ead98901d9b3556b9acc01f085f6a'
+          PY
+          gh release download v0.1.0 --repo "$GITHUB_REPOSITORY" --pattern Current.dmg --dir "$RUNNER_TEMP/current-input"
+      - name: Use the existing Team API key on this disposable runner
+        env:
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+          [[ -n "$API_KEY_P8" ]]
+          printf '%s' "$API_KEY_P8" > "$RUNNER_TEMP/current-notary.p8"
+      - name: Verify provenance, notarize, staple and check Gatekeeper
+        env:
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/current-notary.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          CURRENT_INPUT_DMG: ${{ runner.temp }}/current-input/Current.dmg
+          CURRENT_OUTPUT_DIR: ${{ runner.temp }}/current-verified
+        run: bash scripts/notarize-existing.sh --release
+      - name: Remove the temporary key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/current-notary.p8"
+      - name: Save only verified installer artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Current-0.1.0-verified
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/current-verified/Current.dmg
+            ${{ runner.temp }}/current-verified/Current.dmg.sha256
+            ${{ runner.temp }}/current-verified/Current-manifest.json
+      - name: Publish the verified installer
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/current-verified"
+          shasum -a 256 -c Current.dmg.sha256
+          python3 - <<'PY'
+          import json
+          with open('Current-manifest.json') as stream:
+              manifest = json.load(stream)
+          assert all(manifest[key] for key in ['notarized','dmg_stapled','gatekeeper_verified'])
+          PY
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v0.1.0" > "$RUNNER_TEMP/current-draft-final.json"
+          python3 - "$RUNNER_TEMP/current-draft-final.json" <<'PY'
+          import json, sys
+          with open(sys.argv[1]) as stream:
+              release = json.load(stream)
+          assert release['draft'] is True
+          assert release['target_commitish'] == '304fe8a4ff7ead98901d9b3556b9acc01f085f6a'
+          PY
+          gh release upload v0.1.0 Current.dmg Current.dmg.sha256 Current-manifest.json --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit v0.1.0 --repo "$GITHUB_REPOSITORY" --draft=false --latest \
+            --notes 'Current 0.1.0 is a free MIT-licensed native macOS menu-bar network monitor. Requires macOS 14 or later. Universal 2 installer, Developer ID signed, Apple notarized and DMG stapled. Download Current.dmg, open it, and drag Current to Applications.'
