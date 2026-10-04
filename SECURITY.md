@@ -1,7 +1,7 @@
 # Security reporting
 
-Current is currently available as source. Private vulnerability reporting will be configured before binary releases. Until then, do not post vulnerability details, credentials, network addresses or history databases in public issues.
+For a security concern, open an issue asking the maintainer for a private reporting channel. Leave vulnerability details, credentials, network addresses and history databases out of public issues.
 
-For ordinary bugs, open an issue with the affected version, trigger and a minimal reproduction using synthetic data. The maintainer will investigate confirmed problems. An audit and passing tests do not establish that an application has no bugs.
+For ordinary bugs, include the affected Current version, trigger and a minimal reproduction using synthetic data. The maintainer will investigate confirmed problems. An audit and passing tests do not establish that an application has no bugs.
 
-Current has no automatic update installer, account service, privileged helper, packet capture or login installation. Public-IP disclosure and probe behavior are documented in README.
+Current releases use manual downloads. It has no automatic update installer, account service, privileged helper, packet capture or login installation. Public-IP disclosure and probe behavior are documented in README.
