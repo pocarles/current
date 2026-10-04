@@ -34,11 +34,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v0.1.0" > "$RUNNER_TEMP/current-draft.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/403232290" > "$RUNNER_TEMP/current-draft.json"
           python3 - "$RUNNER_TEMP/current-draft.json" <<'PY'
           import json, sys
           with open(sys.argv[1]) as stream:
               release = json.load(stream)
+          assert release['id'] == 403232290 and release['tag_name'] == 'v0.1.0'
           assert release['draft'] is True
           assert release['target_commitish'] == '304fe8a4ff7ead98901d9b3556b9acc01f085f6a'
           PY
@@ -89,11 +90,12 @@ jobs:
               manifest = json.load(stream)
           assert all(manifest[key] for key in ['notarized','dmg_stapled','gatekeeper_verified'])
           PY
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v0.1.0" > "$RUNNER_TEMP/current-draft-final.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/403232290" > "$RUNNER_TEMP/current-draft-final.json"
           python3 - "$RUNNER_TEMP/current-draft-final.json" <<'PY'
           import json, sys
           with open(sys.argv[1]) as stream:
               release = json.load(stream)
+          assert release['id'] == 403232290 and release['tag_name'] == 'v0.1.0'
           assert release['draft'] is True
           assert release['target_commitish'] == '304fe8a4ff7ead98901d9b3556b9acc01f085f6a'
           PY
