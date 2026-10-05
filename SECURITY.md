@@ -1,6 +1,6 @@
 # Security reporting
 
-For a security concern, open an issue asking the maintainer for a private reporting channel. Leave vulnerability details, credentials, network addresses and history databases out of public issues.
+Report suspected vulnerabilities privately through [GitHub security reporting](https://github.com/pocarles/current/security/advisories/new). Leave vulnerability details, credentials, network addresses and history databases out of public issues.
 
 For ordinary bugs, include the affected Current version, trigger and a minimal reproduction using synthetic data. The maintainer will investigate confirmed problems. An audit and passing tests do not establish that an application has no bugs.
 

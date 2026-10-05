@@ -29,29 +29,31 @@ import SwiftUI
         canvas = surface(settings: value)
     }
     // Runtime panels and Settings previews must resolve the same canvas.
-    static func resolvedSurface(dark: Bool, theme: TrafficColorTheme = .washed) -> NSColor {
+    nonisolated static func resolvedSurface(dark: Bool, theme: TrafficColorTheme = .washed) -> NSColor {
         let rgb = theme.surfaceRGB(dark: dark)
         return NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
     }
     private static func surface(settings: TrafficAppearanceSettings) -> NSColor {
+        // AppKit may resolve dynamic colors off the main thread, so providers stay nonisolated.
         NSColor(name: NSColor.Name("TrafficSurface-\(settings.lightTheme.rawValue)-\(settings.darkTheme.rawValue)")) { appearance in
-            MainActor.assumeIsolated {
-                let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                return resolvedSurface(dark: dark, theme: dark ? settings.darkTheme : settings.lightTheme)
-            }
+            let dark = isDark(appearance)
+            return resolvedSurface(dark: dark, theme: dark ? settings.darkTheme : settings.lightTheme)
         }
     }
-    static func resolved(upload: Bool, increasedContrast: Bool, dark: Bool, theme: TrafficColorTheme = .washed) -> NSColor {
+    nonisolated static func resolved(upload: Bool, increasedContrast: Bool, dark: Bool, theme: TrafficColorTheme = .washed) -> NSColor {
         let rgb = theme.rgb(upload: upload, dark: dark, increasedContrast: increasedContrast)
         return NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
     }
     private static func direction(_ name: String, upload: Bool, settings: TrafficAppearanceSettings) -> NSColor {
         NSColor(name: NSColor.Name("\(name)-\(settings.lightTheme.rawValue)-\(settings.darkTheme.rawValue)")) { appearance in
-            MainActor.assumeIsolated {
-                let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                return resolved(upload: upload, increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
-                    dark: dark, theme: dark ? settings.darkTheme : settings.lightTheme)
-            }
+            let match = appearance.bestMatch(from: highContrastAppearances + [.aqua, .darkAqua])
+            let dark = isDark(appearance)
+            return resolved(upload: upload, increasedContrast: match.map(highContrastAppearances.contains) ?? false,
+                dark: dark, theme: dark ? settings.darkTheme : settings.lightTheme)
         }
+    }
+    private nonisolated static let highContrastAppearances: [NSAppearance.Name] = [.accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua]
+    private nonisolated static func isDark(_ appearance: NSAppearance) -> Bool {
+        [.darkAqua, .accessibilityHighContrastDarkAqua].contains(appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua]))
     }
 }

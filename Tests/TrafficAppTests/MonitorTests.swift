@@ -21,6 +21,7 @@ private final class TestInputs: @unchecked Sendable {
     func advance(_ seconds: Double, received: UInt64 = 0, sent: UInt64 = 0) {
         lock.withLock { date = date.addingTimeInterval(seconds); uptime += seconds; self.received += received; self.sent += sent }
     }
+    func setWallClock(by seconds: Double) { lock.withLock { date = date.addingTimeInterval(seconds) } }
     func setExtra(_ counters: [InterfaceCounter]) { lock.withLock { extra = counters } }
     func setBroken(_ broken: Bool) { lock.withLock { self.broken = broken } }
 }
@@ -451,5 +452,20 @@ private actor FaultyRepository: HistoryRepository {
         XCTAssertTrue(try String(contentsOf: csv, encoding: .utf8).contains(",1234,5678,"))
         await model.loadHistory(days: 30)
         XCTAssertEqual(model.historyRows.first?.summary.received, 1234)
+    }
+    func testQuitIsNeverRefusedWhenHistoryNeverOpened() async {
+        let model = model(TestInputs())
+        let quit = await withCheckedContinuation { continuation in model.prepareToQuit { continuation.resume(returning: $0) } }
+        XCTAssertTrue(quit)
+    }
+    func testBackwardWallClockChangeDoesNotStallConnectivityChecks() async throws {
+        let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("history.sqlite"))
+        let model = model(inputs, repository: store)
+        await model.start().value
+        await model.checkConnectivity()?.value
+        inputs.setWallClock(by: -3600); inputs.advance(6)
+        let next = model.checkConnectivity()
+        XCTAssertNotNil(next)
+        await next?.value
     }
 }

@@ -35,7 +35,15 @@ public struct PersistenceBuffer: Sendable {
         if pending.count > 3600 {
             let count = pending.count - 3599
             let removed = pending.prefix(count)
-            let gap = Observation(start: removed.first!.start, end: removed.last!.end, coverage: .unobserved)
+            // Fold the oldest readings into one span but keep their bytes, peaks and health seconds.
+            var gap = Observation(start: removed.first!.start, end: removed.last!.end, coverage: .unobserved)
+            for item in removed {
+                let down = gap.received.addingReportingOverflow(item.received), up = gap.sent.addingReportingOverflow(item.sent)
+                gap.received = down.overflow ? .max : down.partialValue; gap.sent = up.overflow ? .max : up.partialValue
+                gap.peakDown = max(gap.peakDown, item.peakDown); gap.peakUp = max(gap.peakUp, item.peakUp)
+                gap.offlineSeconds += item.offlineSeconds; gap.uncertainSeconds += item.uncertainSeconds
+                if [.observed, .partial].contains(item.coverage) { gap.coverage = .partial }
+            }
             pending.removeFirst(count); pending.insert(gap, at: 0)
         }
     }

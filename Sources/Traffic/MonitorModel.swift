@@ -54,7 +54,8 @@ final class MonitorModel: ObservableObject {
     private var connectionInventory = ConnectionInventory()
     private var lastCounters: [InterfaceCounter] = []
     private var lastRates: [InterfaceRate] = []
-    private var lastInventory = Date.distantPast
+    // Throttles use monotonic uptime so a wall-clock change cannot stall checks or saves.
+    private var lastInventory = -Double.infinity
     private var inventoryLoading = false
     private var inventoryNeedsTailscale = false
     private var inventoryHadTailscale = false
@@ -78,8 +79,8 @@ final class MonitorModel: ObservableObject {
     private var probing = false
     private var probeTask: Task<Void, Never>?
     private var probeGeneration = 0
-    private var lastProbeStarted = Date.distantPast
-    private var lastFlush = Date()
+    private var lastProbeStarted = -Double.infinity
+    private var lastFlush: Double = 0
     private var finishingFlush = false
     private var started = false
     private var tokens: [NSObjectProtocol] = []
@@ -109,7 +110,7 @@ final class MonitorModel: ObservableObject {
         probesEnabled = !preferences.bool(forKey: "probesDisabled")
         self.automatic = automatic; counterProvider = counters; uptimeProvider = uptime
         nowProvider = now; probeProvider = probe; inventoryProvider = inventory; store = repository
-        lastAccounted = now(); lastFlush = now(); healthSince = now()
+        lastAccounted = now(); lastFlush = uptime(); healthSince = now()
         persistedDay = Calendar.current.startOfDay(for: now())
         if let dataURL { self.dataURL = dataURL; return }
 
@@ -231,7 +232,7 @@ final class MonitorModel: ObservableObject {
         }
         connectionStreak.advance(uptime: uptimeProvider(), observed: observed && health == .online, freshness: checkFreshness)
         connectedDuration = connectionStreak.duration
-        if date.timeIntervalSince(lastFlush) >= 60 { flush() }
+        if uptimeProvider() - lastFlush >= 60 { flush() }
         onStatusChange?()
     }
     private func append(_ observation: Observation) {
@@ -283,7 +284,7 @@ final class MonitorModel: ObservableObject {
             return
         }
         finishingFlush = true
-        lastFlush = nowProvider()
+        lastFlush = uptimeProvider()
         // Earlier accumulated evidence is retired; unknown app-off time can
         // never extend a continuous interval. Existing byte/event history stays.
         let connectivity = ConnectivityUpdate.replace(nil)
@@ -328,9 +329,9 @@ final class MonitorModel: ObservableObject {
     func checkConnectivity() -> Task<Void, Never>? {
         guard probesEnabled, !isSleeping else { return nil }
         if probing { return probeTask }
-        let elapsed = nowProvider().timeIntervalSince(lastProbeStarted)
+        let elapsed = uptimeProvider() - lastProbeStarted
         guard elapsed >= 5 else { scheduleProbe(after: 5 - elapsed); return nil }
-        probing = true; checkInProgress = true; checkPending = false; lastProbeStarted = nowProvider()
+        probing = true; checkInProgress = true; checkPending = false; lastProbeStarted = uptimeProvider()
         let generation = probeGeneration
         let hasPath = pathSatisfied
         let task = Task {
@@ -404,7 +405,8 @@ final class MonitorModel: ObservableObject {
     private func notify(title: String, body: String) {
         guard noticesEnabled else { return }
         let content = UNMutableNotificationContent(); content.title = title; content.body = body
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        // One identifier: each outage or recovery alert replaces the previous one instead of piling up.
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "connectivity", content: content, trigger: nil))
     }
     func willSleep() {
         sample(); isSleeping = true; sleepStart = nowProvider()
@@ -437,8 +439,8 @@ final class MonitorModel: ObservableObject {
             inventoryNeedsTailscale = inventoryNeedsTailscale || includeTailscale
             return
         }
-        let now = nowProvider()
-        guard (force && now.timeIntervalSince(lastInventory) >= 5) || (includeTailscale && !inventoryHadTailscale) || now.timeIntervalSince(lastInventory) >= 60 else { return }
+        let now = uptimeProvider()
+        guard (force && now - lastInventory >= 5) || (includeTailscale && !inventoryHadTailscale) || now - lastInventory >= 60 else { return }
         inventoryLoading = true
         let result = await inventoryProvider(includeTailscale)
         connectionInventory = result; lastInventory = now; inventoryHadTailscale = includeTailscale; inventoryLoading = false
@@ -510,6 +512,8 @@ final class MonitorModel: ObservableObject {
     }
     func prepareToQuit(_ completion: @escaping (Bool) -> Void) {
         guard !terminationRequested else { return }
+        // History never opened, so nothing can be saved. Refusing would make Current impossible to quit.
+        guard store != nil else { pathMonitor.cancel(); completion(true); return }
         sample(); terminationRequested = true; sampler?.invalidate(); probeTimer?.invalidate()
         probeGeneration += 1; probeTask?.cancel(); probeTask = nil
         probing = false; checkInProgress = false; checkPending = false

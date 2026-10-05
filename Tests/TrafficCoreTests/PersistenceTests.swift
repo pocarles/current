@@ -31,8 +31,22 @@ final class PersistenceTests: XCTestCase {
             buffer.append(Observation(start: date.addingTimeInterval(Double(i)), end: date.addingTimeInterval(Double(i + 1)), received: 10))
         }
         XCTAssertEqual(buffer.pending.count, 3600)
-        XCTAssertEqual(buffer.pending.first?.coverage, .unobserved)
+        // Folded seconds count as unobserved (partial), never observed zero, and keep their bytes.
+        XCTAssertEqual(buffer.pending.first?.coverage, .partial)
+        XCTAssertEqual(buffer.pending.first?.received, 4010)
         XCTAssertEqual(buffer.pending.first?.duration, 401)
         XCTAssertEqual(buffer.pending.reduce(0) { $0 + $1.duration }, 4000)
+    }
+    func testQueueOverflowFoldKeepsBytesAndPeaks() {
+        var buffer = PersistenceBuffer()
+        for second in 0..<3601 {
+            let start = date.addingTimeInterval(Double(second))
+            buffer.append(Observation(start: start, end: start.addingTimeInterval(1), received: 10, sent: 1, peakDown: Double(second)))
+        }
+        XCTAssertEqual(buffer.pending.count, 3600)
+        XCTAssertEqual(buffer.unsaved.reduce(0) { $0 + $1.received }, 36010)
+        XCTAssertEqual(buffer.unsaved.reduce(0) { $0 + $1.sent }, 3601)
+        XCTAssertEqual(buffer.pending[0].coverage, .partial); XCTAssertEqual(buffer.pending[0].peakDown, 1)
+        XCTAssertEqual(buffer.pending[0].duration, 2)
     }
 }

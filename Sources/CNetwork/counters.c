@@ -11,10 +11,17 @@
 int traffic_interfaces(TrafficInterface *output, int capacity) {
     int mib[] = {CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0};
     size_t size = 0;
-    if (sysctl(mib, 6, NULL, &size, NULL, 0) != 0) return -errno;
-    char *buffer = malloc(size);
-    if (!buffer) return -1;
-    if (sysctl(mib, 6, buffer, &size, NULL, 0) != 0) { int code = errno; free(buffer); return -code; }
+    char *buffer = NULL;
+    // Interfaces can appear between sizing and reading. Leave slack and retry on ENOMEM.
+    for (int attempt = 0;; attempt++) {
+        if (sysctl(mib, 6, NULL, &size, NULL, 0) != 0) return -errno;
+        size += size / 4 + 4096;
+        buffer = malloc(size);
+        if (!buffer) return -1;
+        if (sysctl(mib, 6, buffer, &size, NULL, 0) == 0) break;
+        int code = errno; free(buffer);
+        if (code != ENOMEM || attempt == 3) return -code;
+    }
     int count = 0;
     for (char *p = buffer; p + 4 <= buffer + size;) {
         struct if_msghdr *header = (struct if_msghdr *)p;

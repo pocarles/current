@@ -44,7 +44,8 @@ public struct HealthMachine: Sendable {
             // Preserve the event start so a later valid response can log recovery.
             state = .uncertain
         case .failed:
-            if firstFailure == nil { firstFailure = date }
+            // A backward clock change restarts the confirmation window instead of stalling it.
+            if firstFailure.map({ date < $0 }) ?? true { firstFailure = date }
             failures += 1
             if failures >= 2, date.timeIntervalSince(firstFailure!) >= 5 {
                 state = .offline
