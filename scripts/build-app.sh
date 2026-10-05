@@ -3,6 +3,8 @@ set -eu
 cd "${0:A:h}/.."
 ./scripts/swift.sh build -c release -debug-info-format none
 app="$PWD/dist/Current.app"
+# Start from an empty bundle so stale files are never signed into it.
+rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 bin_dir=$(./scripts/swift.sh build -c release --show-bin-path)
 cp "$bin_dir/Current" "$app/Contents/MacOS/Current"

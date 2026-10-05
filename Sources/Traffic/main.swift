@@ -136,12 +136,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         fflush(stdout)
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        model.prepareToQuit { saved in sender.reply(toApplicationShouldTerminate: saved) }
+        // Never veto logout, restart or shutdown: save within a short bound, then quit regardless.
+        let endingSession = Self.systemIsEndingSession()
+        var replied = false
+        let reply = { (allow: Bool) in
+            guard !replied else { return }
+            replied = true; sender.reply(toApplicationShouldTerminate: allow || endingSession)
+        }
+        model.prepareToQuit { saved in reply(saved) }
+        if endingSession { Task { try? await Task.sleep(for: .seconds(3)); reply(true) } }
         return .terminateLater
+    }
+    private static func systemIsEndingSession() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventClass == kCoreEventClass, event.eventID == kAEQuitApplication,
+              let reason = (event.attributeDescriptor(forKeyword: kAEQuitReason) ?? event.paramDescriptor(forKeyword: kAEQuitReason))?.enumCodeValue
+        else { return false }
+        return [kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAERestart, kAEShowShutdownDialog, kAEShutDown]
+            .map { OSType($0) }.contains(reason)
     }
 }
 
 if CommandLine.arguments.contains("--notification-status") {
+    // UNUserNotificationCenter traps outside an app bundle (for example `swift run`).
+    guard Bundle.main.bundleIdentifier != nil else { fputs("Run --notification-status from Current.app.\n", stderr); exit(1) }
     // Read authorization only. This never requests permission or delivers a notification.
     let finished = DispatchSemaphore(value: 0)
     UNUserNotificationCenter.current().getNotificationSettings { settings in

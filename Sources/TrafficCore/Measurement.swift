@@ -36,11 +36,14 @@ public enum CounterReader {
             count = snapshot(&raw)
         }
         guard count >= 0, count <= raw.count else { throw MeasurementError.unavailable(code: count) }
-        return raw.prefix(Int(count)).map { item in
+        var seen = Set<String>()
+        // An interface detached during the read can repeat a name. Keep the first to avoid double counting.
+        return raw.prefix(Int(count)).compactMap { item in
             var name = item.name
             let text = withUnsafePointer(to: &name) { ptr in
                 ptr.withMemoryRebound(to: CChar.self, capacity: 32) { String(cString: $0) }
             }
+            guard seen.insert(text).inserted else { return nil }
             return InterfaceCounter(name: text, index: item.index, received: item.received, sent: item.sent,
                 active: item.flags & UInt32(IFF_UP | IFF_RUNNING) == UInt32(IFF_UP | IFF_RUNNING), ethernet: item.type == 6)
         }
@@ -69,6 +72,14 @@ public struct Observation: Codable, Sendable, Equatable {
     }
 }
 
+extension Array where Element == InterfaceCounter {
+    /// Keep the first counter for each name so a repeated interface is never counted twice.
+    func uniqueByName() -> [InterfaceCounter] {
+        var seen = Set<String>()
+        return filter { seen.insert($0.name).inserted }
+    }
+}
+
 public struct CounterEngine: Sendable {
     private var baseline: [String: InterfaceCounter] = [:]
     private var lastDate: Date?
@@ -76,9 +87,9 @@ public struct CounterEngine: Sendable {
     public private(set) var interfaces: [String] = []
     public init() {}
     public mutating func rebaseline(_ counters: [InterfaceCounter], at date: Date, uptime: Double) {
-        let selected = counters.filter(\.included)
+        let selected = counters.filter(\.included).uniqueByName()
         baseline = Dictionary(uniqueKeysWithValues: selected.map { ($0.name, $0) })
-        interfaces = selected.map(\.name).sorted(); lastDate = date; lastUptime = uptime
+        interfaces = baseline.keys.sorted(); lastDate = date; lastUptime = uptime
     }
     public mutating func sample(_ counters: [InterfaceCounter], at date: Date, uptime: Double) -> Observation? {
         guard let previousDate = lastDate, let previousUptime = lastUptime else {
@@ -93,15 +104,17 @@ public struct CounterEngine: Sendable {
         }
         var received: UInt64 = 0, sent: UInt64 = 0
         var complete = true
-        let selected = counters.filter(\.included)
+        let selected = counters.filter(\.included).uniqueByName()
         if Set(selected.map(\.name)) != Set(baseline.keys) { complete = false }
         for counter in selected {
             guard let old = baseline[counter.name], old.index == counter.index,
                   counter.received >= old.received, counter.sent >= old.sent else {
                 complete = false; continue
             }
-            received += counter.received - old.received
-            sent += counter.sent - old.sent
+            let down = received.addingReportingOverflow(counter.received - old.received)
+            let up = sent.addingReportingOverflow(counter.sent - old.sent)
+            guard !down.overflow, !up.overflow else { complete = false; continue }
+            received = down.partialValue; sent = up.partialValue
         }
         return Observation(start: previousDate, end: date, received: received, sent: sent,
             peakDown: Double(received) / elapsed, peakUp: Double(sent) / elapsed,

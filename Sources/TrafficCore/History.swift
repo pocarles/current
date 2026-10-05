@@ -500,6 +500,10 @@ public actor HistoryStore: HistoryRepository {
         for event in events.reversed() {
             text += "event,\(formatter.string(from: event.date)),,,,,,,,,,,\(quote(event.kind)),\(quote(event.detail))\n"
         }
-        try text.write(to: destination, atomically: true, encoding: .utf8)
+        // Publish with the same exclusive rename as backup so a file created meanwhile is never replaced.
+        let temporary = destination.deletingLastPathComponent().appendingPathComponent(".Current-export-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try text.write(to: temporary, atomically: false, encoding: .utf8)
+        guard renameatx_np(AT_FDCWD, temporary.path, AT_FDCWD, destination.path, UInt32(RENAME_EXCL)) == 0 else { throw HistoryError("Could not publish export: \(String(cString: strerror(errno)))") }
     }
 }

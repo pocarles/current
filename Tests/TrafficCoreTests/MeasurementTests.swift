@@ -98,4 +98,35 @@ final class MeasurementTests: XCTestCase {
         XCTAssertThrowsError(try CounterReader.read { raw in calls += 1; return Int32(raw.count + 1) })
         XCTAssertEqual(calls, 4)
     }
+    func testRepeatedInterfaceNameIsCountedOnce() throws {
+        let counters = try CounterReader.read { raw in
+            for index in 0..<2 {
+                var item = TrafficInterface()
+                withUnsafeMutableBytes(of: &item.name) { bytes in
+                    for (offset, byte) in "en0".utf8.enumerated() { bytes[offset] = byte }
+                }
+                item.index = UInt32(index + 1); item.flags = UInt32(IFF_UP | IFF_RUNNING); item.type = 6
+                raw[index] = item
+            }
+            return 2
+        }
+        XCTAssertEqual(counters.map(\.name), ["en0"]); XCTAssertEqual(counters.first?.index, 1)
+        var engine = CounterEngine()
+        let first = InterfaceCounter(name: "en0", index: 1, received: 100, sent: 0)
+        engine.rebaseline([first, first], at: date, uptime: 1)
+        XCTAssertEqual(engine.interfaces, ["en0"])
+        let later = InterfaceCounter(name: "en0", index: 1, received: 150, sent: 0)
+        XCTAssertEqual(engine.sample([later, later], at: date.addingTimeInterval(1), uptime: 2)?.received, 50)
+        var rates = InterfaceRateEngine()
+        rates.rebaseline([first, first], at: date, uptime: 1)
+        XCTAssertEqual(rates.sample([later, later], at: date.addingTimeInterval(1), uptime: 2).map(\.down), [50])
+    }
+    func testCounterSumOverflowBecomesPartialInsteadOfCrashing() {
+        var engine = CounterEngine()
+        engine.rebaseline([.init(name: "en0", index: 1, received: 0, sent: 0), .init(name: "en1", index: 2, received: 0, sent: 0)],
+            at: date, uptime: 1)
+        let result = engine.sample([.init(name: "en0", index: 1, received: .max, sent: 0), .init(name: "en1", index: 2, received: 10, sent: 0)],
+            at: date.addingTimeInterval(1), uptime: 2)
+        XCTAssertEqual(result?.coverage, .partial)
+    }
 }

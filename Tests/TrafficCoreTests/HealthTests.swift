@@ -60,4 +60,12 @@ final class HealthTests: XCTestCase {
         XCTAssertFalse(endpoint.accepts(status: 204, body: Data("portal".utf8), finalURL: endpoint.url))
         XCTAssertFalse(endpoint.accepts(status: 204, body: Data(), finalURL: URL(string: "https://example.com/")))
     }
+    func testBackwardClockChangeRestartsConfirmationInsteadOfStalling() {
+        var machine = HealthMachine()
+        _ = machine.receive(.failed, at: date)
+        _ = machine.receive(.failed, at: date.addingTimeInterval(-3600))
+        XCTAssertEqual(machine.state, .uncertain)
+        _ = machine.receive(.failed, at: date.addingTimeInterval(-3594))
+        XCTAssertEqual(machine.state, .offline)
+    }
 }

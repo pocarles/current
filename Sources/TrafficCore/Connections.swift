@@ -48,11 +48,11 @@ public struct InterfaceRateEngine: Sendable {
     private var lastUptime: Double?
     public init() {}
     public mutating func rebaseline(_ counters: [InterfaceCounter], at date: Date, uptime: Double) {
-        baseline = Dictionary(uniqueKeysWithValues: counters.filter(\.active).map { ($0.name, $0) })
+        baseline = Dictionary(uniqueKeysWithValues: counters.filter(\.active).uniqueByName().map { ($0.name, $0) })
         lastDate = date; lastUptime = uptime
     }
     public mutating func sample(_ counters: [InterfaceCounter], at date: Date, uptime: Double) -> [InterfaceRate] {
-        let active = counters.filter(\.active)
+        let active = counters.filter(\.active).uniqueByName()
         defer { rebaseline(counters, at: date, uptime: uptime) }
         guard let lastDate, let lastUptime else { return active.map { InterfaceRate(name: $0.name) } }
         let elapsed = uptime - lastUptime, wall = date.timeIntervalSince(lastDate)
