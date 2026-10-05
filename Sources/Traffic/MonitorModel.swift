@@ -111,6 +111,8 @@ final class MonitorModel: ObservableObject {
     private var speedTestTask: Task<Void, Never>?
     private let loginItem: any LoginItemControl
     static let loginItemOfferKey = "loginItemOfferHandled"
+    /// Set once a first install qualifies, so quitting before answering doesn't lose the offer.
+    static let loginItemOfferPendingKey = "loginItemOfferPending"
     private var checkFreshness: Double { (lowPower ? 120 : 30) + 10 }
 
     init(dataURL: URL? = nil, repository: (any HistoryRepository)? = nil, automatic: Bool = true, preferences: UserDefaults = .standard,
@@ -403,25 +405,34 @@ final class MonitorModel: ObservableObject {
     func evaluateLoginItemOffer() {
         loginItemStatus = loginItem.status
         guard !preferences.bool(forKey: Self.loginItemOfferKey) else { return }
-        let firstInstall = !FileManager.default.fileExists(atPath: dataURL.path)
-        if Self.shouldOfferLoginItem(firstInstall: firstInstall, status: loginItemStatus) { showLoginItemOffer = true }
-        else { preferences.set(true, forKey: Self.loginItemOfferKey) }
+        let firstInstall = preferences.bool(forKey: Self.loginItemOfferPendingKey) || !FileManager.default.fileExists(atPath: dataURL.path)
+        if Self.shouldOfferLoginItem(firstInstall: firstInstall, status: loginItemStatus) {
+            preferences.set(true, forKey: Self.loginItemOfferPendingKey); showLoginItemOffer = true
+        } else { markLoginItemOfferHandled() }
     }
     static func shouldOfferLoginItem(firstInstall: Bool, status: LoginItemStatus) -> Bool {
         firstInstall && status == .disabled
     }
     func answerLoginItemOffer(enable: Bool) {
-        preferences.set(true, forKey: Self.loginItemOfferKey)
-        showLoginItemOffer = false
-        if enable { setOpenAtLogin(true) }
+        markLoginItemOfferHandled()
+        if enable && loginItem.status == .disabled { setOpenAtLogin(true) }
     }
     func setOpenAtLogin(_ enabled: Bool) {
         do { try loginItem.setEnabled(enabled) }
         catch { errorMessage = "Couldn't change Open at login: \(error.localizedDescription)" }
-        loginItemStatus = loginItem.status
+        refreshLoginItemStatus()
     }
     /// The person can change it in System Settings at any time, so read it again before showing it.
-    func refreshLoginItemStatus() { loginItemStatus = loginItem.status }
+    /// Once it's on by any route, the first-install offer has done its job.
+    func refreshLoginItemStatus() {
+        loginItemStatus = loginItem.status
+        if showLoginItemOffer && (loginItemStatus == .enabled || loginItemStatus == .needsApproval) { markLoginItemOfferHandled() }
+    }
+    private func markLoginItemOfferHandled() {
+        preferences.set(true, forKey: Self.loginItemOfferKey)
+        preferences.removeObject(forKey: Self.loginItemOfferPendingKey)
+        showLoginItemOffer = false
+    }
     func openLoginItemsSettings() { loginItem.openSystemSettings() }
     /// Start a speed test, first asking before it spends data on a metered connection.
     func requestSpeedTest() {

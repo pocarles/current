@@ -548,6 +548,18 @@ private actor FaultyRepository: HistoryRepository {
         item.fails = true; model.setOpenAtLogin(false)
         XCTAssertEqual(model.loginItemStatus, .enabled); XCTAssertTrue(model.errorMessage?.contains("Open at login") == true)
     }
+    func testOfferSurvivesAnEarlyQuitAndClearsWhenEnabledElsewhere() throws {
+        let url = directory.appendingPathComponent("history.sqlite"), item = FakeLoginItem()
+        let first = MonitorModel(dataURL: url, automatic: false, preferences: preferences, loginItem: item)
+        first.evaluateLoginItemOffer(); XCTAssertTrue(first.showLoginItemOffer)
+        _ = try HistoryStore(url: url) // the first launch created history, then quit without answering
+        let second = MonitorModel(dataURL: url, automatic: false, preferences: preferences, loginItem: item)
+        second.evaluateLoginItemOffer(); XCTAssertTrue(second.showLoginItemOffer, "still offered until answered")
+        second.setOpenAtLogin(true) // switched on from Settings instead
+        XCTAssertFalse(second.showLoginItemOffer); XCTAssertTrue(preferences.bool(forKey: MonitorModel.loginItemOfferKey))
+        second.answerLoginItemOffer(enable: true)
+        XCTAssertEqual(item.calls, [true], "never registers twice")
+    }
     func testUpgradesWithHistoryAreNotAskedAndRemembered() throws {
         let url = directory.appendingPathComponent("history.sqlite")
         _ = try HistoryStore(url: url)

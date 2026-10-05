@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var historyWindow: NSWindow?
     private lazy var settings = SettingsWindowController(model: model, showHistory: { [weak self] in self?.showHistory() })
     private var appearanceObservation: NSKeyValueObservation?
+    private var panelShownOnce = false
     func applicationDidFinishLaunching(_ notification: Notification) {
         status = NSStatusBar.system.statusItem(withLength: StatusFace.width)
         if let button = status.button {
@@ -39,8 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         model.evaluateLoginItemOffer()
         model.start(); updateStatus(); profileUI("started")
         // First install: open the panel once so the person sees where Current lives and the login offer.
-        if model.showLoginItemOffer {
-            Task { try? await Task.sleep(for: .seconds(1.5)); if !menuPopover.isShown { togglePopover() } }
+        // Skipped when the person (or --show) already opened it, so it never toggles a panel closed.
+        if model.showLoginItemOffer && !CommandLine.arguments.contains("--show") {
+            Task { try? await Task.sleep(for: .seconds(1.5)); if !panelShownOnce && model.showLoginItemOffer { togglePopover() } }
         }
         if CommandLine.arguments.contains("--show") {
             Task { try? await Task.sleep(for: .seconds(2)); togglePopover() }
@@ -94,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateSystemAppearance()
         let view = PopoverView(model: model, showHistory: { [weak self] in self?.showHistory() },
             showSettings: { [weak self] in self?.showSettings() }, showAbout: { [weak self] in self?.showAbout() }, quit: { NSApp.terminate(nil) }, setPinned: { [weak self] in self?.menuPopover.setPinned($0) })
-        model.popoverOpen = true
+        model.popoverOpen = true; panelShownOnce = true
         updateStatus()
         menuPopover.show(view, relativeTo: button)
         profileUI("popover_shown")
@@ -107,6 +109,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Activation is asynchronous when a status button belongs to an
         // inactive accessory app. Finish focus after AppKit activates it.
         menuPopover.focus()
+        // Open at login approval may have just happened in System Settings.
+        model.refreshLoginItemStatus()
         if status != nil { profileUI("activated") }
     }
     private func showHistory() {
@@ -126,7 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         settings.show(); profileUI("settings_shown")
     }
     @objc private func showAbout() {
-        menuPopover.close()
+        menuPopover.close(); model.refreshLoginItemStatus()
         settings.show(tab: .about); profileUI("settings_about_shown")
     }
     func windowWillClose(_ notification: Notification) {
