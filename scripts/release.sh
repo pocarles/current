@@ -36,8 +36,8 @@ codesign --force --timestamp --sign "$identity" "$out/Current.dmg"
 if [[ "$mode" == --release ]]; then
   xcrun notarytool submit "$out/Current.dmg" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" \
     --issuer "$APPLE_API_ISSUER_ID" --wait --timeout 30m --output-format json > "$stage/notary.json"
-  status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$stage/notary.json")
-  [[ "$status" == Accepted ]] || { echo "Notarization status: $status" >&2; exit 1; }
+  notary_status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$stage/notary.json")
+  [[ "$notary_status" == Accepted ]] || { echo "Notarization status: $notary_status" >&2; exit 1; }
   xcrun stapler staple "$out/Current.dmg"
   xcrun stapler validate "$out/Current.dmg"
   spctl --assess --type open --context context:primary-signature "$out/Current.dmg"
