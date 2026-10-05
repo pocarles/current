@@ -36,6 +36,14 @@ import SwiftUI
         }
         return nil
     }
+    /// Captures at 2x regardless of the display the window lands on, so renders stay sharp and comparable.
+    private func retinaBitmap(of view: NSView) throws -> NSBitmapImageRep {
+        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * 2), pixelsHigh: Int(view.bounds.height * 2),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        rep.size = view.bounds.size
+        view.cacheDisplay(in: view.bounds, to: rep)
+        return rep
+    }
     private func press(_ object: NSObject) {
         if let node = object as? any NSAccessibilityProtocol { _ = node.accessibilityPerformPress() }
         else { object.accessibilityPerformAction(.press) }
@@ -69,7 +77,7 @@ import SwiftUI
                 XCTAssertEqual(window.title, "Current Settings")
                 releasedContent = controller.tabs
                 XCTAssertNotNil(window.toolbar, "Preferences tabs must use a native toolbar")
-                XCTAssertEqual(window.frame.width, 820, accuracy: 1)
+                XCTAssertEqual(window.frame.width, SettingsWindowController.contentSize.width, accuracy: 1)
                 for tab in SettingsTab.allCases {
                     controller.select(tab); pump()
                     XCTAssertEqual(controller.selectedTab, tab)
@@ -241,9 +249,8 @@ import SwiftUI
                 controller.show(tab: tab); controller.applyAppearance(); pump(); pump()
                 let view = try XCTUnwrap(controller.window?.contentView?.superview)
                 view.displayIfNeeded()
-                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-                view.cacheDisplay(in: view.bounds, to: bitmap)
-                XCTAssertGreaterThanOrEqual(bitmap.pixelsWide, 820)
+                let bitmap = try retinaBitmap(of: view)
+                XCTAssertGreaterThanOrEqual(CGFloat(bitmap.pixelsWide), SettingsWindowController.contentSize.width)
                 try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("settings-native-\(tab.rawValue)-\(dark ? "dark" : "light").png"))
             }
         }
@@ -254,8 +261,7 @@ import SwiftUI
                 controller.show(tab: .appearance); controller.applyAppearance(); pump(); pump()
                 let view = try XCTUnwrap(controller.window?.contentView?.superview)
                 view.displayIfNeeded()
-                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-                view.cacheDisplay(in: view.bounds, to: bitmap)
+                let bitmap = try retinaBitmap(of: view)
                 try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("settings-native-appearance-\(dark ? "dark" : "light")-\(theme.rawValue).png"))
             }
         }

@@ -14,6 +14,7 @@ import SwiftUI
     static var downloadAccent: NSColor { download }
     static var uploadAccent: NSColor { upload }
     static var reachable: NSColor { healthy }
+    static var reachableColor: Color { Color(nsColor: healthy) }
     static var windowDownloadColor: Color { Color(nsColor: download) }
     static var windowUploadColor: Color { Color(nsColor: upload) }
     static var downloadAccentColor: Color { windowDownloadColor }

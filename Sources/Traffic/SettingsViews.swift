@@ -6,186 +6,172 @@ struct SettingsPane: View {
     let tab: SettingsTab
     var showHistory: () -> Void
     var body: some View {
-        ScrollView { content }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .font(.system(size: 15))
-    }
-    private var content: some View {
-            VStack(alignment: .leading, spacing: 28) {
-                switch tab {
-                case .general: general
-                case .appearance: appearance
-                case .history: history
-                case .about: about
-                }
-                if let error = model.errorMessage {
-                    Text(error).font(.system(size: 12)).foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }.padding(32).frame(maxWidth: .infinity, alignment: .leading)
-    }
-    private func heading(_ title: String) -> some View {
-        Text(title).font(.system(size: 28, weight: .semibold))
-    }
-    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 16, content: content)
-            .padding(20).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.06), lineWidth: 1))
-    }
-    private func note(_ text: String) -> some View {
-        Text(text).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-    }
-    private var general: some View {
-        Group {
-            heading("General")
-            card {
-                SettingsCheckbox(title: "Internet checks", value: model.probesEnabled, choose: model.setProbes)
-                    .frame(height: 24)
-                    .help("Check internet access even when Wi-Fi stays connected.")
-                Divider()
-                SettingsCheckbox(title: "Outage and recovery notifications", value: model.noticesEnabled, choose: model.setNotifications)
-                    .frame(height: 24)
-                note("Requires macOS notification permission.")
+        Form {
+            switch tab {
+            case .general: general
+            case .appearance: appearance
+            case .history: history
+            case .about: about
             }
-            DisclosureGroup("Connection check privacy") {
-                note("Google and Cloudflare receive your public IP. Checks run every 30 seconds (120 in Low Power Mode), with a 5-second timeout. Two failed checks confirm an outage.")
-                    .padding(.top, 8)
-            }.font(.system(size: 12))
+            if let error = model.errorMessage {
+                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.visible)
+    }
+    private func row(_ title: String, _ detail: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            if let detail { Text(detail).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
         }
     }
-    private var appearance: some View {
-        Group {
-            heading("Appearance")
-            HStack(spacing: 20) {
-                Text("Window mode").fontWeight(.medium).fixedSize()
+    private func footer(_ text: String) -> some View {
+        Text(text).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    }
+    @ViewBuilder private var general: some View {
+        Section {
+            LabeledContent {
+                SettingsSwitch(title: "Internet checks", value: model.probesEnabled, choose: model.setProbes)
+            } label: { row("Internet checks", "Confirms real internet access, even when Wi-Fi stays connected.") }
+            LabeledContent {
+                SettingsSwitch(title: "Outage and recovery notifications", value: model.noticesEnabled, choose: model.setNotifications)
+            } label: { row("Outage alerts", "Notifies you when the internet drops and when it's back.") }
+        } header: { Text("Monitoring") } footer: {
+            footer("Each check asks Google, then Cloudflare, for an empty page every 30 seconds (2 minutes in Low Power Mode). Both see your public IP address. Two failed checks at least 5 seconds apart confirm an outage.")
+        }
+        Section {
+            LabeledContent("Measured by", value: "Apple networkQuality")
+            LabeledContent("Last test used", value: model.lastSpeedTest.map { Format.bytes($0.bytesUsed) } ?? "No test yet")
+        } header: { Text("Speed test") } footer: {
+            footer("Tests run only when you ask, at full speed for about 12 seconds, so faster connections use more data. On a phone hotspot or other metered connection, Current asks first.")
+        }
+    }
+    @ViewBuilder private var appearance: some View {
+        Section {
+            LabeledContent("Window") {
                 SettingsModePicker(mode: model.appearance.mode) {
                     var value = model.appearance; value.mode = $0; model.setAppearance(value)
-                }.frame(width: 360, height: 28)
+                }.frame(width: 240, height: 24)
             }
-            HStack(alignment: .top, spacing: 16) {
-                paletteCard(dark: false)
-                paletteCard(dark: true)
-            }
-            HStack {
-                Spacer(minLength: 12)
-                Button("Reset appearance") { model.setAppearance(.defaults) }
-                    .help("Restore System mode and Washed colors for light and dark.")
-            }
-        }
+            HStack(spacing: 12) {
+                PalettePreview(theme: model.appearance.lightTheme, dark: false)
+                PalettePreview(theme: model.appearance.darkTheme, dark: true)
+            }.padding(.vertical, 4)
+        } header: { Text("Mode") }
+        paletteSection(dark: false)
+        paletteSection(dark: true)
     }
-    private func paletteCard(dark: Bool) -> some View {
+    private func paletteSection(dark: Bool) -> some View {
         let selected = dark ? model.appearance.darkTheme : model.appearance.lightTheme
-        return card {
-            HStack {
-                Image(systemName: dark ? "moon" : "sun.max").foregroundStyle(.secondary)
-                Text(dark ? "Dark colors" : "Light colors").fontWeight(.medium)
-            }
-            PalettePreview(theme: selected, dark: dark)
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+        return Section {
+            HStack(spacing: 10) {
                 ForEach(TrafficColorTheme.allCases, id: \.self) { theme in
                     PaletteChoice(theme: theme, dark: dark, selected: theme == selected) {
                         var value = model.appearance
                         if dark { value.darkTheme = theme } else { value.lightTheme = theme }
                         model.setAppearance(value)
-                    }.frame(maxWidth: .infinity).frame(height: 74)
+                    }.frame(maxWidth: .infinity).frame(height: 58)
                 }
-            }
-
-        }
-    }
-    private var history: some View {
-        Group {
-            heading("History")
-            card {
-                HStack(spacing: 16) {
-                    retention("7 days", "Minute summaries")
-                    Divider()
-                    retention("180 days", "Hourly summaries")
-                    Divider()
-                    retention("100 years", "Daily summaries")
-                }.frame(height: 46)
-            }
-            card {
+            }.padding(.vertical, 4)
+        } header: {
+            Label(dark ? "Dark colors" : "Light colors", systemImage: dark ? "moon" : "sun.max")
+        } footer: {
+            if dark {
                 HStack {
-                    Label("History files", systemImage: "externaldrive").fontWeight(.medium)
                     Spacer()
-                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([model.dataURL]) }
-                }
-                Text(model.dataURL.deletingLastPathComponent().path)
-                    .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
-                    .help(model.dataURL.path)
-                Divider()
-                HStack(spacing: 10) {
-                    Button("Open history", action: showHistory)
-                    Spacer()
-                    Button("Export CSV…") { model.export(backup: false) }
-                        .help("Export daily totals and retained events.")
-                    Button("Back up…") { model.export(backup: true) }
-                        .help("Save all retained history as a SQLite database.")
+                    Button("Reset Appearance") { model.setAppearance(.defaults) }
+                        .help("Restore System mode and Washed colors for light and dark.")
                 }
             }
-            DisclosureGroup("Restore a backup") {
-                note("Quit Current. Preserve the current database and its WAL sidecars before replacing it with your backup. Replacement can lose newer history.").padding(.top, 8)
-            }.font(.system(size: 12))
         }
     }
-    private func retention(_ value: String, _ title: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(value).font(.system(size: 19, weight: .medium)).monospacedDigit()
-            Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
-        }.frame(maxWidth: .infinity, alignment: .leading)
+    @ViewBuilder private var history: some View {
+        Section {
+            LabeledContent("Minute detail", value: "7 days")
+            LabeledContent("Hourly detail", value: "180 days")
+            LabeledContent("Daily totals", value: "100 years")
+        } header: { Text("Kept on this Mac") } footer: {
+            footer("History never leaves this Mac. Older detail is folded into coarser summaries, so totals stay exact.")
+        }
+        Section {
+            LabeledContent {
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([model.dataURL]) }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Location")
+                    Text(model.dataURL.deletingLastPathComponent().path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        .textSelection(.enabled).help(model.dataURL.path)
+                }
+            }
+            HStack(spacing: 8) {
+                Button("Open History", action: showHistory)
+                Spacer()
+                Button("Export CSV…") { model.export(backup: false) }.help("Export daily totals and retained events.")
+                Button("Back Up…") { model.export(backup: true) }.help("Save all retained history as a SQLite database.")
+            }
+        } header: { Text("Your data") } footer: {
+            footer("To restore a backup, quit Current and keep a copy of the current database and its -wal and -shm files before replacing it. Replacing it can lose newer history.")
+        }
     }
-    private var about: some View {
-        Group {
-            HStack(spacing: 16) {
-                HStack(spacing: 4) {
+    // Outside the app bundle (tests, `swift run`) the main bundle belongs to another program.
+    private var version: String {
+        guard Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String == "Current" else { return "0.1.0" }
+        return Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+    }
+    @ViewBuilder private var about: some View {
+        Section {
+            VStack(spacing: 10) {
+                HStack(spacing: 3) {
                     Image(systemName: "arrow.down").foregroundStyle(TrafficPalette.windowDownloadColor)
                     Image(systemName: "arrow.up").foregroundStyle(TrafficPalette.windowUploadColor)
-                }.font(.system(size: 24, weight: .medium)).frame(width: 64, height: 64)
-                    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 15))
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Current").font(.system(size: 30, weight: .semibold))
-                    note("Version 0.1.0")
                 }
-            }
-            card {
-                LabeledContent("Author", value: "Pierre-Olivier Carles")
-                Divider()
-                LabeledContent("License", value: "MIT")
-                Divider()
-                Text("© 2026 Pierre-Olivier Carles").font(.system(size: 12)).foregroundStyle(.secondary)
-            }
-            Button("Check for Updates") {}.disabled(true)
-                .help("Automatic updates are not configured.")
+                .font(.system(size: 26, weight: .semibold)).frame(width: 72, height: 72)
+                .background(Color(nsColor: TrafficPalette.surface), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+                Text("Current").font(.system(size: 22, weight: .semibold))
+                Text("Version \(version)").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text("Live traffic, internet health and speed, right in your menu bar.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }.frame(maxWidth: .infinity).padding(.vertical, 12)
         }
+        Section {
+            LabeledContent("Author", value: "Pierre-Olivier Carles")
+            LabeledContent("License", value: "MIT")
+            LabeledContent("Source") {
+                Link("github.com/pocarles/current", destination: URL(string: "https://github.com/pocarles/current")!)
+            }
+            LabeledContent("Updates") {
+                Link("Releases on GitHub", destination: URL(string: "https://github.com/pocarles/current/releases")!)
+            }
+        } footer: { footer("© 2026 Pierre-Olivier Carles. Current has no account, analytics or automatic updater.") }
     }
-
 }
 
-struct SettingsCheckbox: NSViewRepresentable {
+/// A native switch keeps keyboard, VoiceOver and accessibility-press behavior.
+struct SettingsSwitch: NSViewRepresentable {
     let title: String
     let value: Bool
     let choose: (Bool) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(choose: choose) }
-    func makeNSView(context: Context) -> NSButton {
-        let button = NSButton(checkboxWithTitle: title, target: context.coordinator, action: #selector(Coordinator.changed(_:)))
-        button.font = .systemFont(ofSize: 15, weight: .medium)
-        button.setAccessibilityLabel(title)
-        return button
+    func makeNSView(context: Context) -> NSSwitch {
+        let control = NSSwitch()
+        control.target = context.coordinator; control.action = #selector(Coordinator.changed(_:))
+        control.controlSize = .small
+        control.setAccessibilityLabel(title)
+        return control
     }
-    func updateNSView(_ button: NSButton, context: Context) {
+    func updateNSView(_ control: NSSwitch, context: Context) {
         context.coordinator.choose = choose
         let state = value ? NSControl.StateValue.on : .off
-        if button.state != state { button.state = state }
-    }
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSButton, context: Context) -> NSSize? {
-        NSSize(width: proposal.width ?? nsView.intrinsicContentSize.width, height: 28)
+        if control.state != state { control.state = state }
     }
     @MainActor final class Coordinator: NSObject {
         var choose: (Bool) -> Void
         init(choose: @escaping (Bool) -> Void) { self.choose = choose }
-        @objc func changed(_ button: NSButton) { choose(button.state == .on) }
+        @objc func changed(_ control: NSSwitch) { choose(control.state == .on) }
     }
 }
 
@@ -226,7 +212,7 @@ struct PaletteChoice: NSViewRepresentable {
     let action: () -> Void
     func makeNSView(context: Context) -> PaletteChoiceButton { PaletteChoiceButton() }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: PaletteChoiceButton, context: Context) -> NSSize? {
-        NSSize(width: proposal.width ?? 200, height: 74)
+        NSSize(width: proposal.width ?? 80, height: 58)
     }
     func updateNSView(_ button: PaletteChoiceButton, context: Context) {
         button.theme = theme; button.dark = dark; button.chosen = selected; button.invoke = action
@@ -260,30 +246,27 @@ struct PaletteChoice: NSViewRepresentable {
     override var focusRingMaskBounds: NSRect { bounds }
     override func drawFocusRingMask() { NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill() }
     override func draw(_ dirtyRect: NSRect) {
-        let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 9, yRadius: 9)
+        let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 1.5, dy: 1.5), xRadius: 8, yRadius: 8)
         TrafficPalette.resolvedSurface(dark: dark, theme: theme).setFill(); shape.fill()
         (chosen ? NSColor.controlAccentColor : (dark ? NSColor.white : .black).withAlphaComponent(0.12)).setStroke()
-        shape.lineWidth = chosen ? 2 : 0.7; shape.stroke()
+        shape.lineWidth = chosen ? 2.5 : 0.6; shape.stroke()
         if isHighlighted { NSColor.labelColor.withAlphaComponent(0.05).setFill(); shape.fill() }
         let ink = dark ? NSColor(white: 0.9, alpha: 1) : NSColor(white: 0.15, alpha: 1)
-        (theme.title as NSString).draw(at: NSPoint(x: 12, y: isFlipped ? 10 : bounds.height - 25),
-            withAttributes: [.font: NSFont.systemFont(ofSize: 14, weight: .medium), .foregroundColor: ink])
-        if chosen {
-            ("✓" as NSString).draw(at: NSPoint(x: bounds.width - 23, y: isFlipped ? 10 : bounds.height - 25),
-                withAttributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.controlAccentColor])
-        }
+        let titleTop: CGFloat = 8, chartHeight = max(10, bounds.height * 0.32)
+        (theme.title as NSString).draw(at: NSPoint(x: 9, y: isFlipped ? titleTop : bounds.height - titleTop - 15),
+            withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: ink])
         for (upload, heights) in [(false, [0.15, 0.3, 0.24, 0.72, 0.4, 0.5]), (true, [0.08, 0.15, 0.12, 0.25, 0.2, 0.3])] {
             let path = NSBezierPath()
             for (index, height) in heights.enumerated() {
-                let point = NSPoint(x: 12 + CGFloat(index) / 5 * (bounds.width - 24), y: isFlipped ? bounds.height - 10 - height * 26 : 10 + height * 26)
+                let rise = 8 + height * chartHeight
+                let point = NSPoint(x: 9 + CGFloat(index) / 5 * (bounds.width - 18), y: isFlipped ? bounds.height - rise : rise)
                 if index == 0 { path.move(to: point) } else { path.line(to: point) }
             }
             TrafficPalette.resolved(upload: upload, increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
                 dark: dark, theme: theme).setStroke()
-            path.lineWidth = 1.5; path.lineJoinStyle = .round; path.stroke()
+            path.lineWidth = 1.5; path.lineJoinStyle = .round; path.lineCapStyle = .round; path.stroke()
         }
     }
-
 }
 
 struct PalettePreview: View {
@@ -310,16 +293,16 @@ struct PalettePreview: View {
                     context.stroke(path, with: .color(Self.ink(theme, dark: dark, upload: upload)),
                         style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
                 }
-            }.frame(height: 44).accessibilityHidden(true)
-        }.padding(18).background(Color(nsColor: TrafficPalette.resolvedSurface(dark: dark, theme: theme)), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: dark ? .white : .black).opacity(0.08), lineWidth: 1))
+            }.frame(height: 34).accessibilityHidden(true)
+        }.padding(14).background(Color(nsColor: TrafficPalette.resolvedSurface(dark: dark, theme: theme)), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color(nsColor: dark ? .white : .black).opacity(0.08), lineWidth: 1))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Sample preview, \(dark ? "dark" : "light") \(theme.title), download 842 kilobytes per second, upload 125 kilobytes per second")
     }
     private func previewRate(_ arrow: String, _ value: String, upload: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 3) {
             Text(arrow).font(.system(size: 11, weight: .medium))
-            Text(value).font(.system(size: 24, weight: .medium)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+            Text(value).font(.system(size: 20, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
             Text("KB/s").font(.system(size: 11)).foregroundStyle(dark ? Color.white.opacity(0.55) : Color.black.opacity(0.5))
         }.foregroundStyle(Self.ink(theme, dark: dark, upload: upload))
     }

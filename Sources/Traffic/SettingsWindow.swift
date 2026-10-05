@@ -18,7 +18,7 @@ enum SettingsTab: String, CaseIterable, Sendable {
     private let frameAutosaveName: String?
     private(set) var window: NSWindow?
     private(set) var tabs: NSTabViewController?
-    static let contentSize = NSSize(width: 820, height: 710)
+    static let contentSize = NSSize(width: 620, height: 600)
     private var lastTab = SettingsTab.general
     init(model: MonitorModel, showHistory: @escaping () -> Void, frameAutosaveName: String? = "TrafficSettings",
          activate: @escaping () -> Void = { NSApp.activate(ignoringOtherApps: true) }) {
@@ -51,7 +51,7 @@ enum SettingsTab: String, CaseIterable, Sendable {
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Current Settings"; window.isReleasedWhenClosed = false
         window.backgroundColor = .windowBackgroundColor
-        window.contentMinSize = NSSize(width: 780, height: 670)
+        window.contentMinSize = NSSize(width: 560, height: 520)
         window.delegate = self; window.tabbingMode = .disallowed
         let tabs = NSTabViewController()
         tabs.tabStyle = .toolbar; tabs.transitionOptions = []
