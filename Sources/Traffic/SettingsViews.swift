@@ -117,20 +117,14 @@ struct SettingsPane: View {
     }
     // Outside the app bundle (tests, `swift run`) the main bundle belongs to another program.
     private var version: String {
-        guard Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String == "Current" else { return "0.1.1" }
-        return Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.1"
+        guard Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String == "Current" else { return "0.1.2" }
+        return Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.2"
     }
     @ViewBuilder private var about: some View {
         Section {
             VStack(spacing: 10) {
-                HStack(spacing: 3) {
-                    Image(systemName: "arrow.down").foregroundStyle(TrafficPalette.windowDownloadColor)
-                    Image(systemName: "arrow.up").foregroundStyle(TrafficPalette.windowUploadColor)
-                }
-                .font(.system(size: 26, weight: .semibold)).frame(width: 72, height: 72)
-                .background(Color(nsColor: TrafficPalette.surface), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
-                .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+                Image(nsImage: NSApp.applicationIconImage).resizable().interpolation(.high)
+                    .frame(width: 84, height: 84).accessibilityHidden(true)
                 Text("Current").font(.system(size: 22, weight: .semibold))
                 Text("Version \(version)").font(.system(size: 12)).foregroundStyle(.secondary)
                 Text("Live traffic, internet health and speed, right in your menu bar.")
