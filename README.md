@@ -12,7 +12,7 @@ Current shows download and upload rates together, with a separate internet-healt
 
 ## Download
 
-[Download Current 0.1.0 for macOS](https://github.com/pocarles/current/releases/download/v0.1.0/Current.dmg). Open the DMG and drag Current to Applications.
+[Download Current for macOS](https://github.com/pocarles/current/releases/latest/download/Current.dmg). Open the DMG and drag Current to Applications.
 
 The installer is Developer ID signed, Apple notarized and stapled. Requires macOS 14 or later and contains Apple Silicon and Intel binaries. Runtime verification has been performed on Apple Silicon; Intel hardware has not yet been tested. Updates are installed manually from [GitHub Releases](https://github.com/pocarles/current/releases). Current does not install itself at login.
 
