@@ -41,10 +41,27 @@ struct SettingsPane: View {
             footer("Each check asks Google, then Cloudflare, for an empty page every 30 seconds (2 minutes in Low Power Mode). Both see your public IP address. Two failed checks at least 5 seconds apart confirm an outage.")
         }
         Section {
+            LabeledContent {
+                SettingsSwitch(title: "Open at login", value: model.loginItemStatus == .enabled || model.loginItemStatus == .needsApproval,
+                               enabled: model.loginItemStatus != .unavailable, choose: model.setOpenAtLogin)
+            } label: { row("Open at login", loginItemDetail) }
+            if model.loginItemStatus == .needsApproval {
+                HStack { Spacer(); Button("Open Login Items…") { model.openLoginItemsSettings() } }
+            }
+        } header: { Text("Startup") }
+        Section {
             LabeledContent("Measured by", value: "Apple networkQuality")
             LabeledContent("Last test used", value: model.lastSpeedTest.map { Format.bytes($0.bytesUsed) } ?? "No test yet")
         } header: { Text("Speed test") } footer: {
             footer("Tests run only when you ask, at full speed for about 12 seconds, so faster connections use more data. On a phone hotspot or other metered connection, Current asks first.")
+        }
+    }
+    private var loginItemDetail: String {
+        switch model.loginItemStatus {
+        case .enabled: "Current starts when you log in."
+        case .disabled: "Start Current automatically when you log in."
+        case .needsApproval: "Waiting for your approval in System Settings > General > Login Items."
+        case .unavailable: "Available when Current runs from the Applications folder."
         }
     }
     @ViewBuilder private var appearance: some View {
@@ -123,7 +140,7 @@ struct SettingsPane: View {
     @ViewBuilder private var about: some View {
         Section {
             VStack(spacing: 10) {
-                Image(nsImage: NSApp.applicationIconImage).resizable().interpolation(.high)
+                Image(nsImage: NSApplication.shared.applicationIconImage).resizable().interpolation(.high)
                     .frame(width: 84, height: 84).accessibilityHidden(true)
                 Text("Current").font(.system(size: 22, weight: .semibold))
                 Text("Version \(version)").font(.system(size: 12)).foregroundStyle(.secondary)
@@ -148,6 +165,7 @@ struct SettingsPane: View {
 struct SettingsSwitch: NSViewRepresentable {
     let title: String
     let value: Bool
+    var enabled = true
     let choose: (Bool) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(choose: choose) }
     func makeNSView(context: Context) -> NSSwitch {
@@ -161,6 +179,7 @@ struct SettingsSwitch: NSViewRepresentable {
         context.coordinator.choose = choose
         let state = value ? NSControl.StateValue.on : .off
         if control.state != state { control.state = state }
+        control.isEnabled = enabled
     }
     @MainActor final class Coordinator: NSObject {
         var choose: (Bool) -> Void
