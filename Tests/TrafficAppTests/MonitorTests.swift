@@ -240,7 +240,8 @@ private actor FaultyRepository: HistoryRepository {
         inputs.setExtra([.init(name: "utun9", index: 99, received: 1000, sent: 2000, ethernet: false)])
         let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false, preferences: preferences,
             counters: { try inputs.counters() }, uptime: { inputs.clock() }, now: { inputs.now() }, probe: { .success },
-            inventory: { _ in ConnectionInventory(physicalKinds: ["en0": .wifi], tailscaleInterface: "utun9", tailscaleInstalled: true, tailscaleAvailable: true, tailscaleIndex: 99) })
+            inventory: { _ in ConnectionInventory(physicalKinds: ["en0": .wifi], tailscaleInterface: "utun9", tailscaleInstalled: true, tailscaleAvailable: true, tailscaleIndex: 99,
+                addresses: ["en0": ["192.168.1.4"], "utun9": ["100.80.1.2"]]) })
         await model.start().value; await model.refreshConnectionInventory(includeTailscale: true)
         model.popoverOpen = true
         inputs.setExtra([.init(name: "utun9", index: 99, received: 1500, sent: 2200, ethernet: false)])
@@ -467,5 +468,73 @@ private actor FaultyRepository: HistoryRepository {
         let next = model.checkConnectivity()
         XCTAssertNotNil(next)
         await next?.value
+    }
+    func testUnmeasuredNoteIgnoresSleepAndShortGaps() {
+        XCTAssertNil(Format.unmeasuredNote(appGap: 30, unobserved: 20))
+        XCTAssertEqual(Format.unmeasuredNote(appGap: 720, unobserved: 60), "13m not measured · Current wasn't running")
+        XCTAssertEqual(Format.unmeasuredNote(appGap: 0, unobserved: 300), "5m not measured · no readings")
+    }
+    func testSpeedTestAsksOnHotspotThenSavesResultAndHistoryEvent() async throws {
+        let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("history.sqlite"))
+        let result = SpeedTestResult(start: inputs.now(), end: inputs.now().addingTimeInterval(9), download: 300e6, upload: 40e6,
+                                     responsiveness: 900, bytesUsed: 420_000_000)
+        let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), repository: store, automatic: false,
+            preferences: preferences, counters: { try inputs.counters() }, uptime: { inputs.clock() }, now: { inputs.now() },
+            speedTest: { result })
+        await model.start().value
+        model.meteredInterface = "en0"
+        model.requestSpeedTest()
+        XCTAssertEqual(model.speedTestPhase, .confirmMetered); XCTAssertTrue(model.speedTestDataNote.hasPrefix("It can use several hundred MB"))
+        model.cancelSpeedTest(); XCTAssertEqual(model.speedTestPhase, .idle)
+        model.requestSpeedTest(); model.requestSpeedTest()
+        guard case .running = model.speedTestPhase else { return XCTFail("confirmed test should run") }
+        while model.speedTestPhase != .idle { await Task.yield() }
+        XCTAssertEqual(model.lastSpeedTest, result); XCTAssertEqual(model.graphMarkers.first?.date, result.start)
+        XCTAssertTrue(model.speedTestDataNote.hasPrefix("Your last test used 420 MB"))
+        let saved = await model.flushAndWait(); XCTAssertTrue(saved)
+        let events = try await store.events(limit: 10)
+        XCTAssertTrue(events.contains { $0.kind == "speed_test" && $0.detail.contains("300 Mbps down") && $0.detail.contains("Snappy") })
+        let relaunched = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false, preferences: preferences)
+        XCTAssertEqual(relaunched.lastSpeedTest, result)
+    }
+    func testFailedSpeedTestReportsWithoutChangingTheLastResult() async {
+        let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false, preferences: preferences,
+            speedTest: { throw HistoryError("The speed test didn't finish.") })
+        model.requestSpeedTest()
+        while case .running = model.speedTestPhase { await Task.yield() }
+        XCTAssertEqual(model.speedTestPhase, .failed("The speed test didn't finish.")); XCTAssertNil(model.lastSpeedTest)
+    }
+    func testSleepStopsARunningSpeedTestAndDiscardsItsResult() async {
+        let gate = SpeedTestGate()
+        let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false, preferences: preferences,
+            speedTest: { try await gate.wait() })
+        model.requestSpeedTest()
+        guard case .running = model.speedTestPhase else { return XCTFail("test should start") }
+        model.willSleep()
+        XCTAssertEqual(model.speedTestPhase, .idle)
+        await gate.finish()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(model.speedTestPhase, .idle); XCTAssertNil(model.lastSpeedTest)
+        let cancelled = await gate.sawCancellation; XCTAssertTrue(cancelled)
+    }
+    func testUnknownConnectionTypeAsksBeforeTesting() {
+        let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false, preferences: preferences,
+            speedTest: { SpeedTestResult(start: Date(), end: Date(), download: 1, upload: 1) })
+        model.meteringKnown = false
+        model.requestSpeedTest()
+        XCTAssertEqual(model.speedTestPhase, .confirmMetered)
+    }
+}
+private actor SpeedTestGate {
+    private var waiter: CheckedContinuation<Void, Never>?
+    private(set) var sawCancellation = false
+    func wait() async throws -> SpeedTestResult {
+        await withCheckedContinuation { waiter = $0 }
+        sawCancellation = Task.isCancelled
+        return SpeedTestResult(start: Date(), end: Date(), download: 1e8, upload: 1e7)
+    }
+    func finish() async {
+        while waiter == nil { await Task.yield() }
+        waiter?.resume(); waiter = nil
     }
 }

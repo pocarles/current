@@ -4,10 +4,12 @@ import Darwin
 enum BoundedProcess {
     /// Reads only a child's stdout. No shell, inherited stderr, or disk output.
     /// Polling also bounds the read when another process keeps the pipe open.
-    static func output(_ process: Process, timeout: Double = 2, limit: Int = 32768) -> Data? {
+    /// `launched` runs right after the child starts, so a caller can stop a child it cancelled mid-launch.
+    static func output(_ process: Process, timeout: Double = 2, limit: Int = 32768, launched: (Process) -> Void = { _ in }) -> Data? {
         let pipe = Pipe()
         process.standardOutput = pipe; process.standardError = FileHandle.nullDevice; process.standardInput = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
+        launched(process)
         let pid = process.processIdentifier
         defer {
             if process.isRunning { kill(pid, SIGKILL) }

@@ -29,6 +29,12 @@ final class MonitorModel: ObservableObject {
     @Published var noticesEnabled = false
     @Published var probesEnabled = true
     @Published var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+    /// Primary interface macOS marks as metered (phone hotspot), or nil.
+    @Published var meteredInterface: String?
+    /// False until the first path report, so a hotspot is never mistaken for "not metered" at launch.
+    @Published var meteringKnown: Bool
+    @Published private(set) var speedTestPhase = SpeedTestPhase.idle
+    @Published private(set) var lastSpeedTest: SpeedTestResult?
     @Published private(set) var appearance = TrafficAppearanceSettings.defaults
     var onStatusChange: (() -> Void)?
     var onAppearanceChange: (() -> Void)?
@@ -54,6 +60,8 @@ final class MonitorModel: ObservableObject {
     private var connectionInventory = ConnectionInventory()
     private var lastCounters: [InterfaceCounter] = []
     private var lastRates: [InterfaceRate] = []
+    // Uptime each interface last carried busy traffic, so short bursts keep their row briefly.
+    private var lastBusy: [String: Double] = [:]
     // Throttles use monotonic uptime so a wall-clock change cannot stall checks or saves.
     private var lastInventory = -Double.infinity
     private var inventoryLoading = false
@@ -96,6 +104,8 @@ final class MonitorModel: ObservableObject {
     private let uptimeProvider: @Sendable () -> Double
     private let nowProvider: @Sendable () -> Date
     private let probeProvider: @Sendable () async -> ProbeOutcome
+    private let speedTestProvider: @Sendable () async throws -> SpeedTestResult
+    private var speedTestTask: Task<Void, Never>?
     private var checkFreshness: Double { (lowPower ? 120 : 30) + 10 }
 
     init(dataURL: URL? = nil, repository: (any HistoryRepository)? = nil, automatic: Bool = true, preferences: UserDefaults = .standard,
@@ -103,8 +113,13 @@ final class MonitorModel: ObservableObject {
          uptime: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime },
          now: @escaping @Sendable () -> Date = { Date() },
          probe: @escaping @Sendable () async -> ProbeOutcome = { await ConnectivityProbe.check() },
-         inventory: @escaping @Sendable (Bool) async -> ConnectionInventory = { await NetworkInventory.read(includeTailscale: $0) }) {
+         inventory: @escaping @Sendable (Bool) async -> ConnectionInventory = { await NetworkInventory.read(includeTailscale: $0) },
+         speedTest: @escaping @Sendable () async throws -> SpeedTestResult = { try await SpeedTestRunner.run() }) {
         self.preferences = preferences
+        speedTestProvider = speedTest
+        meteringKnown = !automatic
+        lastSpeedTest = preferences.data(forKey: "lastSpeedTest")
+            .flatMap { try? JSONDecoder().decode(SpeedTestResult.self, from: $0) }.flatMap { $0.isPlausible ? $0 : nil }
         appearance = TrafficAppearanceSettings(preferences: preferences)
         noticesEnabled = preferences.bool(forKey: "outageNotifications")
         probesEnabled = !preferences.bool(forKey: "probesDisabled")
@@ -160,12 +175,15 @@ final class MonitorModel: ObservableObject {
         }
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let satisfied = path.status == .satisfied
+            let metered = path.isExpensive || path.isConstrained ? path.availableInterfaces.first?.name : nil
             let signature = String(describing: path.status) + path.availableInterfaces.map { "\($0.name)#\($0.index)" }.sorted().joined(separator: "|")
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if self.pathSignature != nil && self.pathSignature != signature { self.invalidateConnectionInterval() }
                 self.pathSignature = signature
                 self.pathSatisfied = satisfied
+                self.meteringKnown = true
+                if self.meteredInterface != metered { self.meteredInterface = metered; self.rebuildConnectionDetails() }
                 if self.popoverOpen { Task { await self.refreshConnectionInventory(includeTailscale: true, force: true) } }
                 self.checkConnectivity()
             }
@@ -209,6 +227,7 @@ final class MonitorModel: ObservableObject {
             let counters = try counterProvider()
             lastCounters = counters
             lastRates = detailEngine.sample(counters, at: date, uptime: uptimeProvider())
+            for rate in lastRates where (rate.down ?? 0) + (rate.up ?? 0) >= ConnectionDetail.busyRate { lastBusy[rate.name] = uptimeProvider() }
             if popoverOpen { rebuildConnectionDetails() }
             if var observation = engine.sample(counters, at: date, uptime: uptimeProvider()) {
                 let healthDuration = max(0, observation.end.timeIntervalSince(max(observation.start, healthSince)))
@@ -372,6 +391,58 @@ final class MonitorModel: ObservableObject {
         checkPending = !probing
         _ = checkConnectivity()
     }
+    /// Start a speed test, first asking before it spends data on a metered connection.
+    func requestSpeedTest() {
+        if case .running = speedTestPhase { return }
+        guard !isSleeping else { return }
+        if (meteredInterface != nil || !meteringKnown) && speedTestPhase != .confirmMetered { speedTestPhase = .confirmMetered; return }
+        let started = nowProvider()
+        speedTestPhase = .running(since: started)
+        speedTestTask = Task {
+            do {
+                let result = try await speedTestProvider()
+                // Sleep or quit cancelled this run; its result, if any, no longer describes the link.
+                guard !Task.isCancelled, case .running(since: started) = speedTestPhase else { return }
+                lastSpeedTest = result
+                if let data = try? JSONEncoder().encode(result) { preferences.set(data, forKey: "lastSpeedTest") }
+                persistence.event(at: result.end, kind: "speed_test", detail: speedTestSummary(result))
+                speedTestPhase = .idle
+            } catch {
+                guard !Task.isCancelled, case .running(since: started) = speedTestPhase else { return }
+                speedTestPhase = .failed("\(error)")
+            }
+        }
+    }
+    /// Stop a running test and its child process, for sleep and quit.
+    private func stopSpeedTest() {
+        speedTestTask?.cancel(); speedTestTask = nil
+        if case .running = speedTestPhase { speedTestPhase = .idle }
+        if speedTestPhase == .confirmMetered { speedTestPhase = .idle }
+    }
+    func cancelSpeedTest() {
+        if case .running = speedTestPhase { return }
+        speedTestPhase = .idle
+    }
+    /// The estimated data a test will use, from the previous run when there is one.
+    /// The tool limits time, not data: use the last run as the guide, otherwise say it scales with speed.
+    var speedTestDataNote: String {
+        let pace = "A test runs at full speed for about 12 seconds, so faster connections use more data."
+        guard let used = lastSpeedTest?.bytesUsed, used > 0 else { return "It can use several hundred MB or more. " + pace }
+        return "Your last test used \(Format.bytes(used)). " + pace
+    }
+    private func speedTestSummary(_ result: SpeedTestResult) -> String {
+        var parts = ["\(SpeedTestResult.bits(result.download)) down, \(SpeedTestResult.bits(result.upload)) up"]
+        if let snappiness = result.snappiness, let rpm = result.responsiveness { parts.append("\(snappiness.label) (\(Int(rpm)) RPM)") }
+        parts.append("used \(Format.bytes(result.bytesUsed))")
+        return "Speed test: " + parts.joined(separator: ", ") + "."
+    }
+    /// Marks the most recent or running speed test on the chart so its spike explains itself.
+    var graphMarkers: [GraphMarker] {
+        // One test is noise on week and month charts.
+        guard period == .hour || period == .hours24 else { return [] }
+        if case .running(let since) = speedTestPhase { return [GraphMarker(date: since, label: "Speed test")] }
+        return lastSpeedTest.map { [GraphMarker(date: $0.start, label: "Speed test")] } ?? []
+    }
     func setAppearance(_ value: TrafficAppearanceSettings) {
         guard value != appearance else { return }
         // Publish new color values before SwiftUI observes the preference.
@@ -409,6 +480,7 @@ final class MonitorModel: ObservableObject {
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "connectivity", content: content, trigger: nil))
     }
     func willSleep() {
+        stopSpeedTest()
         sample(); isSleeping = true; sleepStart = nowProvider()
         persistence.event(at: nowProvider(), kind: "sleep", detail: "Mac sleeping. Counter sampling and probes paused.")
         sampler?.invalidate(); probeTimer?.invalidate(); probeGeneration += 1; probeTask?.cancel(); probeTask = nil; probing = false
@@ -451,7 +523,11 @@ final class MonitorModel: ObservableObject {
         }
     }
     private func rebuildConnectionDetails() {
-        connectionDetails = ConnectionDetail.make(counters: lastCounters, rates: lastRates, inventory: connectionInventory)
+        var inventory = connectionInventory
+        if let meteredInterface { inventory.meteredInterfaces = [meteredInterface] }
+        let now = uptimeProvider()
+        lastBusy = lastBusy.filter { now - $0.value < 30 }
+        connectionDetails = ConnectionDetail.make(counters: lastCounters, rates: lastRates, inventory: inventory, recentlyBusy: Set(lastBusy.keys))
     }
     func loadHistory(days: Int = 30) async {
         historyDays = days
@@ -512,6 +588,7 @@ final class MonitorModel: ObservableObject {
     }
     func prepareToQuit(_ completion: @escaping (Bool) -> Void) {
         guard !terminationRequested else { return }
+        stopSpeedTest()
         // History never opened, so nothing can be saved. Refusing would make Current impossible to quit.
         guard store != nil else { pathMonitor.cancel(); completion(true); return }
         sample(); terminationRequested = true; sampler?.invalidate(); probeTimer?.invalidate()
@@ -570,6 +647,12 @@ enum Format {
         if seconds < 3600 { return "\(Int(seconds / 60))m" }
         if seconds < 86400 { return String(format: "%.1fh", seconds / 3600) }
         return String(format: "%.1fd", seconds / 86400)
+    }
+    /// Plain-language note for time Current could not measure, or nil when under a minute.
+    static func unmeasuredNote(appGap: Double, unobserved: Double) -> String? {
+        let missing = appGap + unobserved
+        guard missing >= 60 else { return nil }
+        return "\(duration(missing)) not measured · " + (appGap >= unobserved ? "Current wasn't running" : "no readings")
     }
     static func connectionDuration(_ seconds: Double) -> String {
         guard seconds.isFinite else { return "—" }

@@ -13,21 +13,25 @@ enum NetworkInventory {
                 for interface in interfaces {
                     guard let name = SCNetworkInterfaceGetBSDName(interface) as String?,
                           let type = SCNetworkInterfaceGetInterfaceType(interface) as String? else { continue }
+                    let display = SCNetworkInterfaceGetLocalizedDisplayName(interface) as String? ?? ""
                     if type == (kSCNetworkInterfaceTypeIEEE80211 as String) { inventory.physicalKinds[name] = .wifi }
-                    else if type == (kSCNetworkInterfaceTypeEthernet as String) { inventory.physicalKinds[name] = .ethernet }
+                    else if display.hasPrefix("Thunderbolt") { inventory.physicalKinds[name] = .thunderbolt }
+                    else if type == (kSCNetworkInterfaceTypeEthernet as String) { inventory.physicalKinds[name] = display.hasPrefix("iPhone") ? .hotspot : .ethernet }
                     else if type == (kSCNetworkInterfaceTypeBluetooth as String) { inventory.physicalKinds[name] = .bluetoothPAN }
                 }
             }
+            let addresses = localAddresses()
+            inventory.addresses = addresses
             let app = URL(fileURLWithPath: "/Applications/Tailscale.app", isDirectory: true)
             let supported = ["io.tailscale.ipn.macsys", "io.tailscale.ipn.macos"]
             inventory.tailscaleInstalled = Bundle(url: app)?.bundleIdentifier.map(supported.contains) == true
             guard includeTailscale, inventory.tailscaleInstalled,
-                  let addresses = tailscaleAddresses(executable: app.appendingPathComponent("Contents/MacOS/Tailscale")) else { return inventory }
+                  let own = tailscaleAddresses(executable: app.appendingPathComponent("Contents/MacOS/Tailscale")) else { return inventory }
             inventory.tailscaleAvailable = true
-            inventory.tailscaleInterface = ConnectionInventory.matchTailscale(selfAddresses: addresses, interfaceAddresses: localAddresses())
+            inventory.tailscaleInterface = ConnectionInventory.matchTailscale(selfAddresses: own, interfaceAddresses: addresses)
             if let name = inventory.tailscaleInterface { inventory.tailscaleIndex = name.withCString { if_nametoindex($0) } }
             // No match means current identity cannot establish a local tunnel.
-            if !addresses.isEmpty && (inventory.tailscaleInterface == nil || inventory.tailscaleIndex == 0) { inventory.tailscaleAvailable = false }
+            if !own.isEmpty && (inventory.tailscaleInterface == nil || inventory.tailscaleIndex == 0) { inventory.tailscaleAvailable = false }
             return inventory
         }.value
     }

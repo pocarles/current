@@ -15,13 +15,13 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(inventory.kind(of: .init(name: "utun8", index: 8, received: 0, sent: 0, ethernet: false)), .vpn)
     }
     func testBluetoothMeansAnActualNetworkInterfaceAndNoAccessoryTraffic() {
-        let inventory = ConnectionInventory(physicalKinds: ["en8": .bluetoothPAN, "Keyboard": .bluetoothPAN])
+        let inventory = ConnectionInventory(physicalKinds: ["en8": .bluetoothPAN, "Keyboard": .bluetoothPAN], addresses: ["en8": ["172.20.10.2"]])
         XCTAssertEqual(inventory.kind(of: .init(name: "en8", received: 0, sent: 0)), .bluetoothPAN)
         XCTAssertNil(inventory.kind(of: .init(name: "Keyboard", received: 900, sent: 900, ethernet: false)))
         let rows = ConnectionDetail.make(counters: [.init(name: "Keyboard", received: 900, sent: 900, ethernet: false)], rates: [], inventory: inventory)
         XCTAssertFalse(rows.contains { $0.kind == .bluetoothPAN })
         let pan = InterfaceCounter(name: "en8", received: 100, sent: 50)
-        XCTAssertFalse(ConnectionDetail.make(counters: [pan], rates: [], inventory: inventory).contains { $0.kind == .bluetoothPAN })
+        XCTAssertEqual(ConnectionDetail.make(counters: [pan], rates: [], inventory: inventory).first { $0.kind == .bluetoothPAN }?.status, "Waiting for sample")
         let measured = ConnectionDetail.make(counters: [pan], rates: [InterfaceRate(name: "en8", down: 0, up: 50)], inventory: inventory)
         XCTAssertEqual(measured.first { $0.kind == .bluetoothPAN }?.down, 0)
         XCTAssertEqual(measured.first { $0.kind == .bluetoothPAN }?.up, 50)
@@ -46,7 +46,8 @@ final class ConnectionTests: XCTestCase {
             .init(name: "en0", received: 100, sent: 100), .init(name: "en1", received: 200, sent: 200),
             .init(name: "utun2", index: 2, received: 500, sent: 500, ethernet: false)
         ]
-        let inventory = ConnectionInventory(physicalKinds: ["en0": .wifi, "en1": .ethernet], tailscaleInterface: "utun2", tailscaleIndex: 2)
+        let inventory = ConnectionInventory(physicalKinds: ["en0": .wifi, "en1": .ethernet], tailscaleInterface: "utun2", tailscaleIndex: 2,
+            addresses: ["en0": ["192.168.1.4"], "en1": ["10.0.0.4"], "utun2": ["100.80.1.2"]])
         let rows = ConnectionDetail.make(counters: counters, rates: counters.map { InterfaceRate(name: $0.name, down: Double($0.received), up: Double($0.sent)) }, inventory: inventory)
         XCTAssertEqual(rows.first { $0.kind == .wifi }?.down, 100)
         XCTAssertEqual(rows.first { $0.kind == .ethernet }?.down, 200)
@@ -64,9 +65,46 @@ final class ConnectionTests: XCTestCase {
         let tunnel = InterfaceCounter(name: "utun2", index: 2, received: 100, sent: 50, ethernet: false)
         let rates = [InterfaceRate(name: "utun2", down: 100, up: 50)]
         XCTAssertTrue(ConnectionDetail.make(counters: [tunnel], rates: rates, inventory: ConnectionInventory(tailscaleInstalled: true)).isEmpty)
-        let attributed = ConnectionInventory(tailscaleInterface: "utun2", tailscaleIndex: 2)
+        let attributed = ConnectionInventory(tailscaleInterface: "utun2", tailscaleIndex: 2, addresses: ["utun2": ["100.80.1.2"]])
         XCTAssertEqual(ConnectionDetail.make(counters: [tunnel], rates: rates, inventory: attributed).map(\.kind), [.tailscale])
         let wrongIndex = ConnectionInventory(tailscaleInterface: "utun2", tailscaleIndex: 3)
         XCTAssertTrue(ConnectionDetail.make(counters: [tunnel], rates: rates, inventory: wrongIndex).isEmpty)
+        // An unattributed tunnel with a real address is a generic VPN, still never in physical totals.
+        let vpn = ConnectionDetail.make(counters: [tunnel], rates: rates, inventory: ConnectionInventory(addresses: ["utun2": ["10.8.0.2"]]))
+        XCTAssertEqual(vpn.map(\.kind), [.vpn]); XCTAssertEqual(vpn.first?.status, "Separate overlay")
+        XCTAssertTrue(ConnectionDetail.make(counters: [tunnel], rates: rates, inventory: ConnectionInventory(addresses: ["utun2": ["fe80::1%utun2"]])).isEmpty)
+    }
+    func testIdlePortsStayHiddenUntilTheyHaveAnAddressOrTraffic() {
+        let ports: [InterfaceCounter] = [.init(name: "en0", received: 0, sent: 0), .init(name: "en3", received: 0, sent: 0), .init(name: "en4", received: 0, sent: 0)]
+        let inventory = ConnectionInventory(physicalKinds: ["en0": .wifi, "en3": .ethernet, "en4": .ethernet],
+            addresses: ["en0": ["192.168.1.4", "fe80::1%en0"], "en3": ["fe80::2%en3"], "en4": ["169.254.3.3"]])
+        XCTAssertEqual(ConnectionDetail.make(counters: ports, rates: [], inventory: inventory).map(\.kind), [.wifi])
+        let busy = ConnectionDetail.make(counters: ports, rates: [InterfaceRate(name: "en3", down: 4096, up: 0)], inventory: inventory)
+        XCTAssertEqual(busy.first { $0.kind == .ethernet }?.interfaces, ["en3"])
+        let lingering = ConnectionDetail.make(counters: ports, rates: [], inventory: inventory, recentlyBusy: ["en3"])
+        XCTAssertEqual(lingering.map(\.kind), [.wifi, .ethernet])
+    }
+    func testMeteredLinkBecomesHotspotAndKeepsItsAccounting() {
+        let wifi = InterfaceCounter(name: "en0", received: 0, sent: 0)
+        let inventory = ConnectionInventory(physicalKinds: ["en0": .wifi], addresses: ["en0": ["172.20.10.3"]], meteredInterfaces: ["en0"])
+        let rows = ConnectionDetail.make(counters: [wifi], rates: [InterfaceRate(name: "en0", down: 10, up: 5)], inventory: inventory)
+        XCTAssertEqual(rows.map(\.kind), [.hotspot]); XCTAssertEqual(rows.first?.status, "In physical total")
+        XCTAssertEqual(ConnectionInventory(physicalKinds: ["en7": .hotspot]).kind(of: .init(name: "en7", received: 0, sent: 0)), .hotspot)
+    }
+    func testAirDropAppearsOnlyWhileBusyAndThunderboltBridgeCountsOnce() {
+        let awdl = InterfaceCounter(name: "awdl0", received: 0, sent: 0, ethernet: false)
+        let inventory = ConnectionInventory(physicalKinds: ["bridge0": .thunderbolt, "en1": .thunderbolt, "en2": .thunderbolt],
+            addresses: ["awdl0": ["fe80::3%awdl0"], "bridge0": ["169.254.10.2"]])
+        XCTAssertTrue(ConnectionDetail.make(counters: [awdl], rates: [InterfaceRate(name: "awdl0", down: 300, up: 100)], inventory: inventory).isEmpty)
+        let sharing = ConnectionDetail.make(counters: [awdl], rates: [InterfaceRate(name: "awdl0", down: 9000, up: 100)], inventory: inventory)
+        XCTAssertEqual(sharing.map(\.kind), [.airdrop]); XCTAssertEqual(sharing.first?.status, "Local link")
+        let bridge: [InterfaceCounter] = [.init(name: "bridge0", received: 0, sent: 0, ethernet: false), .init(name: "en1", received: 0, sent: 0), .init(name: "en2", received: 0, sent: 0)]
+        let rates = bridge.map { InterfaceRate(name: $0.name, down: 5000, up: 5000) }
+        let row = ConnectionDetail.make(counters: bridge, rates: rates, inventory: inventory).first { $0.kind == .thunderbolt }
+        XCTAssertEqual(row?.interfaces, ["bridge0"]); XCTAssertEqual(row?.down, 5000)
+        // An idle, unaddressed bridge never hides a busy port.
+        let idleBridge = ConnectionInventory(physicalKinds: ["bridge0": .thunderbolt, "en1": .thunderbolt], addresses: ["en1": ["10.0.0.2"]])
+        let port = ConnectionDetail.make(counters: bridge, rates: [InterfaceRate(name: "en1", down: 10_000, up: 0)], inventory: idleBridge)
+        XCTAssertEqual(port.first { $0.kind == .thunderbolt }?.interfaces, ["en1"])
     }
 }

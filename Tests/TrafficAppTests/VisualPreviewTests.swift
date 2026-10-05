@@ -12,17 +12,20 @@ import TrafficCore
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let preferences = UserDefaults(suiteName: "org.traffic.preview")!
+        let now = Date(timeIntervalSince1970: 1_791_028_800)
+        let sampleTest = SpeedTestResult(start: now.addingTimeInterval(-1500), end: now.addingTimeInterval(-1488), download: 994_859_008,
+                                         upload: 192_328_416, responsiveness: 734.6, idleLatency: 32.7, bytesUsed: 965_323_838)
+        preferences.set(try JSONEncoder().encode(sampleTest), forKey: "lastSpeedTest")
         let model = MonitorModel(automatic: false, preferences: preferences)
         model.setAppearance(.defaults)
         TrafficPalette.apply(.defaults)
         defer { model.setAppearance(.defaults); TrafficPalette.apply(.defaults) }
-        let now = Date(timeIntervalSince1970: 1_791_028_800)
         model.down = 842_000; model.up = 125_000; model.rateAvailable = true
         model.health = .online; model.lastChecked = now; model.interfaces = ["en0"]
         model.connectedDuration = 17 * 60 + 42
         model.connectionDetails = [
             ConnectionDetail(kind: .wifi, interfaces: ["en0"], down: 842_000, up: 125_000, status: "In physical total"),
-            ConnectionDetail(kind: .ethernet, interfaces: ["en1"], down: 0, up: 0, status: "In physical total"),
+            ConnectionDetail(kind: .airdrop, interfaces: ["awdl0"], down: 2_400_000, up: 12_000, status: "Local link"),
             ConnectionDetail(kind: .tailscale, interfaces: ["utun9"], down: 42_000, up: 8_000, status: "Separate overlay")
         ]
         model.graph = (0..<360).map { index in

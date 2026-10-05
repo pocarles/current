@@ -50,4 +50,12 @@ final class BoundedProcessTests: XCTestCase {
         guard FileManager.default.fileExists(atPath: executable.path) else { throw XCTSkip("Tailscale is optional.") }
         XCTAssertTrue(NetworkInventory.trustedTailscale(executable: executable))
     }
+    func testLaunchHookCanStopAChildCancelledMidLaunch() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sleep"); process.arguments = ["5"]
+        let start = ProcessInfo.processInfo.systemUptime
+        XCTAssertNil(BoundedProcess.output(process, timeout: 4, launched: { $0.terminate() }))
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 2)
+        XCTAssertFalse(process.isRunning)
+    }
 }
