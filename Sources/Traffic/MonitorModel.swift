@@ -35,6 +35,9 @@ final class MonitorModel: ObservableObject {
     @Published var meteringKnown: Bool
     @Published private(set) var speedTestPhase = SpeedTestPhase.idle
     @Published private(set) var lastSpeedTest: SpeedTestResult?
+    @Published private(set) var loginItemStatus = LoginItemStatus.unavailable
+    /// The one-time "Open at login" suggestion shown on a first install.
+    @Published var showLoginItemOffer = false
     @Published private(set) var appearance = TrafficAppearanceSettings.defaults
     var onStatusChange: (() -> Void)?
     var onAppearanceChange: (() -> Void)?
@@ -106,6 +109,8 @@ final class MonitorModel: ObservableObject {
     private let probeProvider: @Sendable () async -> ProbeOutcome
     private let speedTestProvider: @Sendable () async throws -> SpeedTestResult
     private var speedTestTask: Task<Void, Never>?
+    private let loginItem: any LoginItemControl
+    static let loginItemOfferKey = "loginItemOfferHandled"
     private var checkFreshness: Double { (lowPower ? 120 : 30) + 10 }
 
     init(dataURL: URL? = nil, repository: (any HistoryRepository)? = nil, automatic: Bool = true, preferences: UserDefaults = .standard,
@@ -114,8 +119,10 @@ final class MonitorModel: ObservableObject {
          now: @escaping @Sendable () -> Date = { Date() },
          probe: @escaping @Sendable () async -> ProbeOutcome = { await ConnectivityProbe.check() },
          inventory: @escaping @Sendable (Bool) async -> ConnectionInventory = { await NetworkInventory.read(includeTailscale: $0) },
-         speedTest: @escaping @Sendable () async throws -> SpeedTestResult = { try await SpeedTestRunner.run() }) {
+         speedTest: @escaping @Sendable () async throws -> SpeedTestResult = { try await SpeedTestRunner.run() },
+         loginItem: (any LoginItemControl)? = nil) {
         self.preferences = preferences
+        self.loginItem = loginItem ?? SystemLoginItem()
         speedTestProvider = speedTest
         meteringKnown = !automatic
         lastSpeedTest = preferences.data(forKey: "lastSpeedTest")
@@ -391,6 +398,31 @@ final class MonitorModel: ObservableObject {
         checkPending = !probing
         _ = checkConnectivity()
     }
+    /// Offer Open at login once, only on a first install, and never when it's already on.
+    /// Call before `start()`, while a missing history file still means a fresh install.
+    func evaluateLoginItemOffer() {
+        loginItemStatus = loginItem.status
+        guard !preferences.bool(forKey: Self.loginItemOfferKey) else { return }
+        let firstInstall = !FileManager.default.fileExists(atPath: dataURL.path)
+        if Self.shouldOfferLoginItem(firstInstall: firstInstall, status: loginItemStatus) { showLoginItemOffer = true }
+        else { preferences.set(true, forKey: Self.loginItemOfferKey) }
+    }
+    static func shouldOfferLoginItem(firstInstall: Bool, status: LoginItemStatus) -> Bool {
+        firstInstall && status == .disabled
+    }
+    func answerLoginItemOffer(enable: Bool) {
+        preferences.set(true, forKey: Self.loginItemOfferKey)
+        showLoginItemOffer = false
+        if enable { setOpenAtLogin(true) }
+    }
+    func setOpenAtLogin(_ enabled: Bool) {
+        do { try loginItem.setEnabled(enabled) }
+        catch { errorMessage = "Couldn't change Open at login: \(error.localizedDescription)" }
+        loginItemStatus = loginItem.status
+    }
+    /// The person can change it in System Settings at any time, so read it again before showing it.
+    func refreshLoginItemStatus() { loginItemStatus = loginItem.status }
+    func openLoginItemsSettings() { loginItem.openSystemSettings() }
     /// Start a speed test, first asking before it spends data on a metered connection.
     func requestSpeedTest() {
         if case .running = speedTestPhase { return }

@@ -85,5 +85,15 @@ import TrafficCore
           }
           }
         }
+        // The one-time first-install card.
+        model.period = .hour; model.setAppearance(.defaults); TrafficPalette.apply(.defaults); model.showLoginItemOffer = true
+        defer { model.showLoginItemOffer = false }
+        let renderer = ImageRenderer(content: PopoverView(model: model, showHistory: {}, showSettings: {}, quit: {}, renderingPreview: true)
+            .environment(\.colorScheme, .light))
+        renderer.scale = 2
+        var rendered: NSImage?
+        NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance { rendered = renderer.nsImage }
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(try XCTUnwrap(rendered).tiffRepresentation)))
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("first-install-light.png"))
     }
 }

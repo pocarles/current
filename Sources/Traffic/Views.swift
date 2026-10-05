@@ -123,6 +123,7 @@ struct PopoverView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             header
+            if model.showLoginItemOffer { loginItemOffer }
             HStack(alignment: .top) {
                 rate("Download", symbol: "arrow.down", value: model.down, color: TrafficPalette.windowDownloadColor, alignment: .leading)
                 Spacer(minLength: 12)
@@ -155,6 +156,21 @@ struct PopoverView: View {
         }
         .padding(22).frame(width: 460)
         .background(TrafficPalette.surfaceColor)
+    }
+    /// Shown once on a first install. Nothing changes until the person picks.
+    private var loginItemOffer: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(nsImage: NSApplication.shared.applicationIconImage).resizable().frame(width: 36, height: 36).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Open at login?").font(.system(size: 13, weight: .semibold))
+                Text("Keep Current in your menu bar after every restart.").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button("Not now") { model.answerLoginItemOffer(enable: false) }.buttonStyle(QuietButtonStyle())
+            Button("Open at Login") { model.answerLoginItemOffer(enable: true) }.buttonStyle(QuietButtonStyle(prominent: true))
+        }
+        .panelCard(padding: 12)
+        .accessibilityElement(children: .contain)
     }
     private var header: some View {
         HStack(spacing: 4) {

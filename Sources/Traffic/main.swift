@@ -36,7 +36,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
             Task { @MainActor [weak self] in self?.updateSystemAppearance() }
         }
+        model.evaluateLoginItemOffer()
         model.start(); updateStatus(); profileUI("started")
+        // First install: open the panel once so the person sees where Current lives and the login offer.
+        if model.showLoginItemOffer {
+            Task { try? await Task.sleep(for: .seconds(1.5)); if !menuPopover.isShown { togglePopover() } }
+        }
         if CommandLine.arguments.contains("--show") {
             Task { try? await Task.sleep(for: .seconds(2)); togglePopover() }
         }
@@ -117,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc private func showSettings() {
         menuPopover.close()
+        model.refreshLoginItemStatus()
         settings.show(); profileUI("settings_shown")
     }
     @objc private func showAbout() {
@@ -176,6 +182,21 @@ if CommandLine.arguments.contains("--notification-status") {
         finished.signal()
     }
     if finished.wait(timeout: .now() + 5) == .timedOut { fputs("Notification settings read timed out.\n", stderr); exit(1) }
+} else if let flag = CommandLine.arguments.firstIndex(of: "--open-at-login") {
+    // Scriptable Open at login: `Current --open-at-login on|off|status`. Runs from the installed app bundle.
+    MainActor.assumeIsolated {
+        let item = SystemLoginItem()
+        let argument = CommandLine.arguments.dropFirst(flag + 1).first ?? "status"
+        do {
+            switch argument {
+            case "on": try item.setEnabled(true)
+            case "off": try item.setEnabled(false)
+            case "status": break
+            default: fputs("Use --open-at-login on, off or status.\n", stderr); exit(64)
+            }
+        } catch { fputs("Couldn't change Open at login: \(error.localizedDescription)\n", stderr); exit(1) }
+        print("open-at-login=\(item.status)")
+    }
 } else if CommandLine.arguments.contains("--connections") {
     let finished = DispatchSemaphore(value: 0)
     Task.detached {

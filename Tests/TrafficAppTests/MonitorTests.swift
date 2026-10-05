@@ -524,6 +524,48 @@ private actor FaultyRepository: HistoryRepository {
         model.requestSpeedTest()
         XCTAssertEqual(model.speedTestPhase, .confirmMetered)
     }
+    func testLoginItemIsOfferedOnlyOnAFirstInstallAndNeverSwitchedOnAlone() {
+        XCTAssertTrue(MonitorModel.shouldOfferLoginItem(firstInstall: true, status: .disabled))
+        for status in [LoginItemStatus.enabled, .needsApproval, .unavailable] {
+            XCTAssertFalse(MonitorModel.shouldOfferLoginItem(firstInstall: true, status: status))
+        }
+        XCTAssertFalse(MonitorModel.shouldOfferLoginItem(firstInstall: false, status: .disabled))
+        let fresh = FakeLoginItem(), model = MonitorModel(dataURL: directory.appendingPathComponent("never-created.sqlite"),
+            automatic: false, preferences: preferences, loginItem: fresh)
+        model.evaluateLoginItemOffer()
+        XCTAssertTrue(model.showLoginItemOffer); XCTAssertEqual(fresh.calls, [])
+        model.answerLoginItemOffer(enable: false)
+        XCTAssertFalse(model.showLoginItemOffer); XCTAssertEqual(fresh.calls, []); XCTAssertEqual(model.loginItemStatus, .disabled)
+        let again = MonitorModel(dataURL: directory.appendingPathComponent("never-created.sqlite"), automatic: false,
+            preferences: preferences, loginItem: FakeLoginItem())
+        again.evaluateLoginItemOffer(); XCTAssertFalse(again.showLoginItemOffer, "a declined offer is not repeated")
+    }
+    func testAcceptingTheOfferRegistersAndFailuresAreReported() {
+        let item = FakeLoginItem(), model = MonitorModel(dataURL: directory.appendingPathComponent("never-created.sqlite"),
+            automatic: false, preferences: preferences, loginItem: item)
+        model.evaluateLoginItemOffer(); model.answerLoginItemOffer(enable: true)
+        XCTAssertEqual(item.calls, [true]); XCTAssertEqual(model.loginItemStatus, .enabled); XCTAssertNil(model.errorMessage)
+        item.fails = true; model.setOpenAtLogin(false)
+        XCTAssertEqual(model.loginItemStatus, .enabled); XCTAssertTrue(model.errorMessage?.contains("Open at login") == true)
+    }
+    func testUpgradesWithHistoryAreNotAskedAndRemembered() throws {
+        let url = directory.appendingPathComponent("history.sqlite")
+        _ = try HistoryStore(url: url)
+        let model = MonitorModel(dataURL: url, automatic: false, preferences: preferences, loginItem: FakeLoginItem())
+        model.evaluateLoginItemOffer()
+        XCTAssertFalse(model.showLoginItemOffer); XCTAssertTrue(preferences.bool(forKey: MonitorModel.loginItemOfferKey))
+    }
+}
+@MainActor private final class FakeLoginItem: LoginItemControl {
+    var status = LoginItemStatus.disabled
+    var calls: [Bool] = []
+    var fails = false
+    func setEnabled(_ enabled: Bool) throws {
+        calls.append(enabled)
+        if fails { throw HistoryError("The operation couldn't be completed.") }
+        status = enabled ? .enabled : .disabled
+    }
+    func openSystemSettings() {}
 }
 private actor SpeedTestGate {
     private var waiter: CheckedContinuation<Void, Never>?
